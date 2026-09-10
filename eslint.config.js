@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', '.claude', 'backup', 'node_modules', 'api_dinahosting']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -23,7 +23,16 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Ignora constantes/componentes (Mayúscula/_) como variables, args con
+      // prefijo `_` (stubs de interfaz) y bindings de catch sin usar.
+      'no-unused-vars': ['error', {
+        varsIgnorePattern: '^[A-Z_]',
+        argsIgnorePattern: '^_',
+        caughtErrors: 'none',
+        ignoreRestSiblings: true,
+      }],
+      // Los catch vacíos son deliberados (swallow) en varias utils.
+      'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
 ])

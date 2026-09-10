@@ -11,6 +11,7 @@ import {
 import Bc3Worker from '../utils/bc3Worker.js?worker';
 import { generarPDFOfertaProveedor, descargarPDF } from '../utils/pdfUtils';
 import { cleanText } from '../utils/escape';
+import { formatDecimal, parseDecimal } from '../utils/format';
 
 // ─── Vista: FEED GLOBAL de respuestas recibidas ──────────────────────────────
 function FeedPresupuestos({ solicitudes, respuestas, partidas, propuestas, proyectoSel, oficioSel, deleteSolicitud, allPartidas }) {
@@ -518,10 +519,6 @@ export default function Comparativa({ setSessionCache }) {
   const [rawCompetencia, setRawCompetencia] = useState({});
   const [guardandoCompetencia, setGuardandoCompetencia] = useState(false);
 
-  const formatDecimal = (val) =>
-    (parseFloat(val) || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const parseDecimal = (str) =>
-    parseFloat((str || '0').replace(/\./g, '').replace(',', '.')) || 0;
 
   // Modal para BC3 Global
   const [modalBC3, setModalBC3] = useState(false);

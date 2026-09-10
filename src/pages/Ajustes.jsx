@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Loader2, Settings, Key, Mail, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Save, Loader2, Settings, Key, Mail, AlertTriangle, CheckCircle, Percent } from 'lucide-react';
 import { useToast } from '../utils/useModal';
 import { supabase } from '../utils/supabaseClient';
 
@@ -9,6 +9,8 @@ const Ajustes = () => {
     const [mistralConfigured, setMistralConfigured] = useState(false);
     const [loading, setLoading] = useState(true);
     const [savingMistral, setSavingMistral] = useState(false);
+    const [beneficioPct, setBeneficioPct] = useState('');
+    const [savingBeneficio, setSavingBeneficio] = useState(false);
 
     useEffect(() => {
         const init = async () => {
@@ -21,18 +23,48 @@ const Ajustes = () => {
                     .maybeSingle();
                 if (data?.valor && data.valor.length > 10) {
                     setMistralConfigured(true);
-                    // Sincronizar a localStorage como caché local
                     localStorage.setItem('mistral_api_key', data.valor);
-                    return;
+                } else {
+                    const cached = localStorage.getItem('mistral_api_key');
+                    if (cached && cached.length > 10) setMistralConfigured(true);
                 }
             } catch (_) {}
-            // Fallback a localStorage
-            const cached = localStorage.getItem('mistral_api_key');
-            if (cached && cached.length > 10) setMistralConfigured(true);
-            setLoading(false);
+            // Leer % de beneficio por defecto
+            try {
+                const { data } = await supabase
+                    .from('configuracion')
+                    .select('valor')
+                    .eq('clave', 'beneficio_pct')
+                    .maybeSingle();
+                if (data?.valor !== undefined && data?.valor !== null && data.valor !== '') {
+                    setBeneficioPct(String(data.valor));
+                }
+            } catch (_) {}
         };
         init().finally(() => setLoading(false));
     }, []);
+
+    const handleSaveBeneficio = async (e) => {
+        e.preventDefault();
+        const pct = parseFloat(String(beneficioPct).replace(',', '.'));
+        if (isNaN(pct) || pct < 0 || pct > 100) {
+            showToast('Introduce un % de beneficio válido (0–100).', 'error');
+            return;
+        }
+        setSavingBeneficio(true);
+        try {
+            const { error } = await supabase
+                .from('configuracion')
+                .upsert({ clave: 'beneficio_pct', valor: String(pct), updated_at: new Date().toISOString() }, { onConflict: 'clave' });
+            if (error) throw error;
+            setBeneficioPct(String(pct));
+            showToast('% de beneficio por defecto guardado ✅');
+        } catch (err) {
+            showToast('Error al guardar el % de beneficio: ' + err.message, 'error');
+        } finally {
+            setSavingBeneficio(false);
+        }
+    };
 
     const handleSaveMistral = async (e) => {
         e.preventDefault();
@@ -77,6 +109,38 @@ const Ajustes = () => {
                 <div style={{ padding: '40px', textAlign: 'center' }}><Loader2 className="loader-spinner" /> Cargando configuración...</div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '680px' }}>
+
+                    {/* % BENEFICIO POR DEFECTO */}
+                    <div className="glass-card" style={{ border: '1px solid var(--primary)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+                            <Percent size={22} color="var(--primary)" />
+                            <h2 style={{ margin: 0 }}>Margen de beneficio por defecto</h2>
+                        </div>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                            Se aplica a los precios de coste para calcular el PVP del cliente. Se puede
+                            ajustar por proyecto en Borradores y Jefe de Obra. El cliente no ve este porcentaje.
+                        </p>
+                        <form onSubmit={handleSaveBeneficio}>
+                            <div className="form-group">
+                                <label>% de beneficio</label>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 200 }}>
+                                    <input
+                                        type="number"
+                                        min="0" max="100" step="0.5"
+                                        value={beneficioPct}
+                                        onChange={e => setBeneficioPct(e.target.value)}
+                                        placeholder="Ej: 15"
+                                        style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }}
+                                    />
+                                    <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>%</span>
+                                </div>
+                            </div>
+                            <button type="submit" className="btn btn-primary" disabled={savingBeneficio} style={{ marginTop: '16px' }}>
+                                {savingBeneficio ? <Loader2 className="loader-spinner" size={16} /> : <Save size={16} />}
+                                {savingBeneficio ? ' Guardando...' : ' Guardar % por defecto'}
+                            </button>
+                        </form>
+                    </div>
 
                     {/* MISTRAL API */}
                     <div className="glass-card" style={{ border: mistralConfigured ? '1px solid var(--success)' : '1px solid var(--primary)' }}>

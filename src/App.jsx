@@ -1,14 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { HashRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { FileUp, Files, Users, Settings, BarChart2, Mailbox, HardHat, Database, History, FileCheck, LayoutDashboard, FileSignature, Building2, LogOut, UserCog, Loader2, Eye, EyeOff } from 'lucide-react';
+import { FileUp, Files, Users, Settings, BarChart2, Mailbox, HardHat, Database, History, LayoutDashboard, FileSignature, Building2, LogOut, UserCog, Loader2, Eye, EyeOff } from 'lucide-react';
 import { supabase } from './utils/supabaseClient';
 import { AuthProvider, useAuth } from './context/AuthContext';
-
-// ─── Hex encode contraseña (igual que Usuarios.jsx) ──────────────────────────
-const toHex = (str) =>
-  Array.from(new TextEncoder().encode(str))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+import { toHex } from './utils/hash';
 
 // ─── Modal Mi Perfil ──────────────────────────────────────────────────────────
 const PerfilModal = ({ user, onClose, onSaved }) => {
@@ -211,7 +206,6 @@ const AppContent = () => {
   const { user, loading } = useAuth();
   const location = useLocation();
   const [sessionCache, setSessionCache] = React.useState({});
-  const [notification, setNotification] = useState(null);
   const [sidebarCounts, setSidebarCounts] = useState({ borradores: 0, bandeja: 0, jefes: 0 });
   const [showPerfil, setShowPerfil] = useState(false);
   const [currentUser, setCurrentUser] = React.useState(null);
@@ -241,29 +235,9 @@ const AppContent = () => {
     }
   }, [fetchCounts, user]);
 
-  useEffect(() => {
-    if (user) {
-      const channel = supabase
-        .channel('presupuestos_firmados_realtime')
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'presupuestos_cliente',
-          filter: 'estado=eq.firmado'
-        }, (payload) => {
-          const p = payload.new;
-          setNotification({
-            msg: `✅ ${p.cliente_nombre || 'Un cliente'} ha firmado el presupuesto del proyecto ${p.propuesta_id}`,
-            type: 'success',
-            id: p.id
-          });
-          setTimeout(() => setNotification(null), 8000);
-          fetchCounts();
-        })
-        .subscribe();
-      return () => supabase.removeChannel(channel);
-    }
-  }, [fetchCounts, user]);
+  // Nota: la notificación en vivo de firmas dependía de supabase realtime, que
+  // el backend MySQL no soporta (el shim deja channel().subscribe() como no-op).
+  // Se retiró el código muerto; reimplementar sobre polling/webhook si se desea.
 
   if (loading) {
     return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>Cargando...</div>;
@@ -299,9 +273,6 @@ const AppContent = () => {
     return <Navigate to="/dashboard" replace />;
   }
 
-  const toastBg = 'linear-gradient(135deg, #15803d, #16a34a)';
-  const toastShadow = '0 8px 32px rgba(22,163,74,0.4)';
-
   return (
     <div className="app-container">
       <Sidebar counts={sidebarCounts} user={currentUser || user} onOpenPerfil={() => setShowPerfil(true)} />
@@ -319,25 +290,6 @@ const AppContent = () => {
           }}
         />
       )}
-        {notification && (
-          <div style={{
-            position: 'fixed', bottom: 24, right: 24, zIndex: 99999,
-            background: toastBg,
-            color: 'white', padding: '16px 24px', borderRadius: 14,
-            boxShadow: toastShadow,
-            maxWidth: 420, display: 'flex', gap: 12, alignItems: 'flex-start',
-            animation: 'fadeIn 0.4s ease'
-          }}>
-            <FileCheck size={22} style={{ flexShrink: 0, marginTop: 2 }} />
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>Nueva firma recibida</div>
-              <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>{notification.msg}</div>
-            </div>
-            <button onClick={() => setNotification(null)} style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', padding: 0, marginLeft: 'auto' }}>
-              ✕
-            </button>
-          </div>
-        )}
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<Dashboard />} />

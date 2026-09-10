@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '../utils/supabaseClient';
+import { formatDecimal, parseDecimal } from '../utils/format';
 import { useModal, useToast } from '../utils/useModal';
 import {
   Search, Save, FileUp, Loader2, Database, TableProperties,
   X, CheckCircle, AlertCircle, Upload, Info, FileText, AlertTriangle
 } from 'lucide-react';
-import { bc3ToBasePrecios, getRatio, clasificarTipo } from '../utils/bc3ToBasePrecios';
+import { bc3ToBasePrecios, getRatio } from '../utils/bc3ToBasePrecios';
 import { extraerPartidasDePDF, extraerPartidasDePDFConIA } from '../utils/pdfExtractor';
 import { detectarSimilares, detectarDuplicadosInternos } from '../utils/similarityUtils';
 
@@ -355,7 +357,7 @@ function ModalImport({ onClose, onImportDone, showToast }) {
     boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
   };
 
-  return (
+  return createPortal(
     <div style={overlayStyle} onClick={e => e.target === e.currentTarget && !importing && onClose()}>
       <div style={boxStyle}>
 
@@ -611,7 +613,7 @@ function ModalImport({ onClose, onImportDone, showToast }) {
 
       </div>
     </div>
-  );
+  , document.body);
 }
 
 // ── Sub-componentes pequeños ──────────────────────────────────────────────────
@@ -736,14 +738,12 @@ const BasePrecios = () => {
   const [editValues,            setEditValues]            = useState({});
   const [rawEditValues,         setRawEditValues]         = useState({});
 
-  const formatDecimal = (val) =>
-    (parseFloat(val) || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const parseDecimal = (str) =>
-    parseFloat((str || '0').replace(/\./g, '').replace(',', '.')) || 0;
   const [saving,                setSaving]                = useState(false);
   const [selectedItem,          setSelectedItem]          = useState(null); // para panel cruzado
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchData(true); }, [activeTab, searchTerm, selectedCategory, selectedTipo]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { cargarCategorias(); setSelectedCategory(''); }, [activeTab]);
 
   const cargarCategorias = async () => {
@@ -778,6 +778,7 @@ const BasePrecios = () => {
     } finally { setLoading(false); }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (page > 0) fetchData(); }, [page]);
 
   const handleEditClick = (item) => {

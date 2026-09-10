@@ -67,12 +67,11 @@ function norm(s) {
  *  - Materiales elementales (azulejo 30x30, cemento CEM II) → 'material'
  *  - Recursos de MO/Maq → 'mano_de_obra' / 'maquinaria'
  */
-export function clasificarTipo({ codigo, descripcion, unidad, mano_de_obra, materiales_y_otros, precio }) {
+export function clasificarTipo({ codigo, descripcion, unidad, mano_de_obra, precio }) {
   const cod  = (codigo || '').toUpperCase();
   const desc = norm(descripcion);
   const ud   = norm(unidad).trim();
   const mo   = parseFloat(mano_de_obra)    || 0;
-  const mat  = parseFloat(materiales_y_otros) || 0;
   const p    = parseFloat(precio)          || 0;
 
   // ── 1. Prefijos de código BC3 ──────────────────────────────────────────────

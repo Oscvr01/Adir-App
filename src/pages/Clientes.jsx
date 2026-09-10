@@ -39,6 +39,8 @@ const Clientes = () => {
         }
     };
 
+    // Carga única al montar; fetchClientes no necesita estar en deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => { fetchClientes(); }, []);
 
     // ── Filtro ────────────────────────────────────────────────────────────────
@@ -77,6 +79,10 @@ const Clientes = () => {
     const handleSave = async () => {
         if (!form.nombre.trim()) {
             showToast('El nombre o empresa es obligatorio.', 'error');
+            return;
+        }
+        if (!form.email.trim()) {
+            showToast('Hace falta añadir un correo electrónico.', 'error');
             return;
         }
         const nifNorm = normalizarNif(form.nif);

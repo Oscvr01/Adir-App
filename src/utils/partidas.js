@@ -37,6 +37,19 @@ export function getTipoFila(p) {
   return 'capitulo';
 }
 
+/**
+ * Suma el total de un presupuesto: precio × cantidad SOLO de las filas que son
+ * partidas hoja (excluye capítulos/subcapítulos y el header sintético de EXTRAS).
+ * Fuente de verdad única compartida por el preview de NuevoProyecto y Borradores
+ * para que el total mostrado sea idéntico en ambos sitios.
+ */
+export function calcularTotalPartidas(items) {
+  return (items || []).reduce((acc, p) => {
+    if (getTipoFila(p) !== 'partida') return acc;
+    return acc + (parseFloat(p['Precio Total (€)'] || 0) * parseFloat(p.Cantidad || 1));
+  }, 0);
+}
+
 // Comparador numérico para ordenar capítulos (01, 01.01, 01.02, 02, …)
 export function sortPartidasFn(a, b) {
   const capA = formatCapitulo(a.Capítulo);

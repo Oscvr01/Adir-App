@@ -62,6 +62,8 @@ const PresupuestoCliente = () => {
             }
         };
         fetchPresupuesto();
+        // Página pública cargada desde enlace: lectura única del token en mount.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // ─── Canvas de firma ───
@@ -411,7 +413,14 @@ const PresupuestoCliente = () => {
 
                                     return (
                                         <tr key={idx} style={{ backgroundColor: bgColor }}>
-                                            <td style={{ ...styles.td, paddingLeft: 32, color: '#334155' }}>{desc}</td>
+                                            <td style={{ ...styles.td, paddingLeft: 32, color: '#334155' }}>
+                                                {desc}
+                                                {(p.comentario && p.comentario.trim()) && (
+                                                    <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#64748b', marginTop: 4 }}>
+                                                        {p.comentario.trim()}
+                                                    </div>
+                                                )}
+                                            </td>
                                             <td style={{ ...styles.td, textAlign: 'center', color: '#64748b', whiteSpace: 'nowrap' }}>
                                                 {cant.toLocaleString('es-ES', { maximumFractionDigits: 2 })}
                                             </td>

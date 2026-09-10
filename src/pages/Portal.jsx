@@ -6,6 +6,7 @@ import { N8N_BASE_URL } from '../config';
 import { useToast } from '../utils/useModal';
 import { generarPDFOfertaProveedor, descargarPDF } from '../utils/pdfUtils';
 import { cleanText } from '../utils/escape';
+import { formatDecimal, parseDecimal } from '../utils/format';
 
 const Portal = () => {
   const [searchParams] = useSearchParams();
@@ -16,10 +17,6 @@ const Portal = () => {
   const [precios, setPrecios] = useState({});
   const [rawPrecios, setRawPrecios] = useState({});
 
-  const formatDecimal = (val) =>
-    (parseFloat(val) || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const parseDecimal = (str) =>
-    parseFloat((str || '0').replace(/\./g, '').replace(',', '.')) || 0;
   const [comentarios, setComentarios] = useState({});
   const [comentariosGenerales, setComentariosGenerales] = useState('');
   const [error, setError] = useState(null);

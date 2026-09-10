@@ -14,6 +14,8 @@ const Historial = () => {
     const [filtroEntidad, setFiltroEntidad] = useState('');
 
     useEffect(() => { fetchPropuestas(); }, []);
+    // Re-fetch al cambiar filtros; fetchHistorial captura los valores actuales.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => { fetchHistorial(); }, [filtroOrigen, filtroEntidad]);
 
     const fetchPropuestas = async () => {

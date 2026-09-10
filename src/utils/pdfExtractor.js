@@ -239,7 +239,7 @@ export function parsearPartidasDePDF(lineas) {
     let descripcion = cleanTokens.join(' ').replace(/\s{2,}/g, ' ').trim();
 
     // Limpiar referencias/códigos al inicio (ej: "12345 Cemento..." → "Cemento...")
-    descripcion = descripcion.replace(/^[A-Z0-9\-\.]{3,15}\s+/i, '').trim();
+    descripcion = descripcion.replace(/^[A-Z0-9.-]{3,15}\s+/i, '').trim();
 
     // Descartar si la descripción es demasiado corta o solo números
     if (descripcion.length < 4 || /^\d+$/.test(descripcion)) continue;

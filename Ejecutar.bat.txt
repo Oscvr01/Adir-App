@@ -1,4 +1,0 @@
-@echo off
-cd App_React
-npm run dev
-pause

@@ -63,8 +63,9 @@ try {
          PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
     );
 } catch (PDOException $e) {
+    error_log('[ADIR API] DB connection failed: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['error' => 'DB connection failed: ' . $e->getMessage()]);
+    echo json_encode(['error' => 'Error de conexión con la base de datos']);
     exit;
 }
 
@@ -153,6 +154,17 @@ function colToMySQL(string $mysqlTable, string $col): string {
     global $TABLE_CONFIG;
     $map = $TABLE_CONFIG[$mysqlTable]['col_map'] ?? [];
     return $map[$col] ?? $col;
+}
+
+/**
+ * Sanea un identificador (nombre de columna) para poder interpolarlo con
+ * seguridad dentro de backticks. PDO no permite parametrizar identificadores,
+ * así que eliminamos todo lo que no sea [A-Za-z0-9_]. Los nombres de columna
+ * legítimos de este esquema son snake_case alfanuméricos, por lo que esto no
+ * altera ninguna consulta válida, pero neutraliza la inyección vía backtick.
+ */
+function sanitizeIdent(string $ident): string {
+    return preg_replace('/[^A-Za-z0-9_]/', '', $ident);
 }
 
 /** Traduce un array de columnas para SELECT (devuelve lista SQL con aliases) */
@@ -295,7 +307,8 @@ function buildWhere(string $mysqlTable, array $params, PDO $pdo): array {
                 if ($d2 === false) continue;
                 $op = substr($rest, 0, $d2);
                 $v  = substr($rest, $d2 + 1);
-                $mc = colToMySQL($mysqlTable, $col);
+                $mc = sanitizeIdent(colToMySQL($mysqlTable, $col));
+                if ($mc === '') continue;
                 $sqlOp = $allowedOps[$op] ?? 'LIKE';
                 $orConds[] = "`$mc` $sqlOp ?";
                 $binds[] = $v;
@@ -306,7 +319,8 @@ function buildWhere(string $mysqlTable, array $params, PDO $pdo): array {
             continue;
         }
 
-        $mysqlCol = colToMySQL($mysqlTable, $key);
+        $mysqlCol = sanitizeIdent(colToMySQL($mysqlTable, $key));
+        if ($mysqlCol === '') continue;
 
         if (strpos($val, '.') !== false) {
             // NOT prefix: not.op.val
@@ -546,6 +560,7 @@ try {
     }
 
 } catch (Exception $e) {
+    error_log('[ADIR API] ' . $method . ' ' . $sbTable . ' → ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    echo json_encode(['error' => 'Error interno del servidor']);
 }

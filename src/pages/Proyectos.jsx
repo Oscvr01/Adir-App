@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
 import { getCleanProjectName } from '../utils/aiAllocation';
+import { cleanText } from '../utils/escape';
 import {
     Loader2, RefreshCw, FolderOpen, CheckCircle, Clock,
     Download, FileCheck, Eye, X, AlertCircle, AlertTriangle, TrendingUp,
@@ -62,14 +63,11 @@ const Proyectos = () => {
     };
 
     useEffect(() => {
+        // Nota: el backend MySQL no soporta realtime (el shim de supabaseClient
+        // deja `channel().subscribe()` como no-op). Cargamos al montar; el
+        // refresco tras firmas externas debe hacerse recargando la vista.
         fetchProyectos();
-        const channel = supabase
-            .channel('proyectos_firma_realtime')
-            .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'presupuestos_cliente' }, () => {
-                fetchProyectos();
-            })
-            .subscribe();
-        return () => supabase.removeChannel(channel);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const fetchProyectos = async () => {
@@ -226,9 +224,18 @@ const Proyectos = () => {
 
     const generarBC3 = (presupuesto) => {
         const allItems = presupuesto.partidas || [];
-        const projectId = (presupuesto.propuesta_id || 'PROYECTO').replace(/[|\\]/g, '_');
-        const projectName = (presupuesto.proyecto_descripcion || getCleanProjectName(presupuesto.propuesta_id)).replace(/[|\\]/g, ' ');
-        const fecha = new Date().toISOString().split('T')[0].replace(/-/g, '');
+        // FIEBDC-3/95 limita los CODIGO a 13 caracteres. Presto trunca el código
+        // pero la línea ~D de descomposición seguiría apuntando al código completo
+        // sin truncar, dejando la raíz huérfana (presupuesto vacío, sin error). El
+        // nombre legible ya va en el RESUMEN (projectName), que no tiene ese límite.
+        // "##" marca la raíz/obra en FIEBDC real (frente a "#" simple de un
+        // capítulo normal) — confirmado contra exports reales de Presto (p.ej. "0##").
+        const projectId = (presupuesto.propuesta_id || 'PROYECTO').replace(/[|\\]/g, '_').slice(0, 11) + '##';
+        const projectName = cleanText((presupuesto.proyecto_descripcion || getCleanProjectName(presupuesto.propuesta_id)).replace(/[|\\]/g, ' '));
+        const hoy = new Date();
+        // Fecha corta DDMMAA, formato usado por Presto en el campo FECHA de cada ~C.
+        const fechaCorta = [hoy.getDate(), hoy.getMonth() + 1, hoy.getFullYear() % 100]
+            .map(n => String(n).padStart(2, '0')).join('');
 
         const allCodes = new Set(allItems.map(p => (p.Capítulo || p.Capitulo || '')).filter(Boolean));
 
@@ -242,9 +249,31 @@ const Proyectos = () => {
             return projectId;
         };
 
+        // Construir árbol de descomposición ~D ANTES de emitir los ~C: necesitamos
+        // saber si un capítulo/subcapítulo tiene partidas hoja reales en este
+        // snapshot. En modo "solo capítulos" (aprobación resumen desde Jefe de
+        // Obra) no se guardan partidas hoja, solo cabeceras — sin hijos de los
+        // que Presto pueda recomponer el total vía ~D, hay que exportar el total
+        // ya calculado (precio_total_capitulo) en lugar de precio 0.
+        const childrenOf = new Map([[projectId, []]]);
+        allItems.forEach(p => {
+            const code = (p.Capítulo || p.Capitulo || '').trim();
+            if (!code) return;
+            const cant = parseFloat(p.Cantidad || p.cantidad || 1) || 1;
+            const parent = findParent(code);
+            if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+            childrenOf.get(parent).push({ code, cant });
+            if (code.endsWith('#') && !childrenOf.has(code)) childrenOf.set(code, []);
+        });
+
         const lines = [];
-        lines.push(`~V|FIEBDC-3/95|ADIR Reformas|${fecha}||`);
-        lines.push(`~C|${projectId}||${projectName}|0||`);
+        // Formato ~V real de Presto: EMPRESA|NORMA|PROGRAMA|FECHA|CODIFICACION|
+        // (confirmado contra exports reales de Presto 8.8/11.02: la norma va en la
+        // 2ª posición, no en la 1ª — con la norma en el sitio equivocado Presto no
+        // reconoce el fichero como FIEBDC válido y no importa nada, sin dar error).
+        lines.push(`~V|ADIR|FIEBDC-3/95|ADIR Reformas||ANSI|`);
+        lines.push(`~K|\\2\\2\\2\\2\\2\\2\\2\\EUR\\|0|`);
+        lines.push(`~C|${projectId}||${projectName}|0|${fechaCorta}|0|`);
 
         allItems.forEach(p => {
             const code = (p.Capítulo || p.Capitulo || '').trim();
@@ -252,15 +281,17 @@ const Proyectos = () => {
 
             const isStructural = code.endsWith('#');
 
-            // Descripción: limpiar prefijos tipo "01.01.01::" y caracteres pipe
+            // Descripción: limpiar prefijos tipo "01.01.01::", pipes y saltos de línea
+            // (el BC3 es un formato por línea; un \n suelto rompería el registro).
             const rawDesc = (p.Descripción || p.Descripcion || p.texto_partida || '').trim();
-            const desc = rawDesc.includes('::')
-                ? rawDesc.split('::').slice(1).join('::').replace(/\|/g, ' ').trim()
-                : rawDesc.replace(/\|/g, ' ').trim();
+            const desc = cleanText(rawDesc);
 
             if (isStructural) {
-                // Capítulo/subcapítulo: precio 0, sin unidad (se calcula de sus hijos)
-                lines.push(`~C|${code}||${desc}|0||`);
+                const tieneHijos = (childrenOf.get(code) || []).length > 0;
+                // Con hijos reales: precio 0, Presto lo recompone sumando vía ~D.
+                // Sin hijos (modo "solo capítulos"): exportamos el total ya calculado.
+                const precioCap = tieneHijos ? 0 : (parseFloat(p.precio_total_capitulo) || 0);
+                lines.push(`~C|${code}||${desc}|${precioCap.toFixed(2)}|${fechaCorta}|0|`);
             } else {
                 // Partida: precio adjudicado final > original BC3 > base estimado
                 const precioUd = parseFloat(
@@ -269,45 +300,46 @@ const Proyectos = () => {
                     p.precio_base_estimado ??
                     0
                 ) || 0;
-                const cant   = parseFloat(p.Cantidad || p.cantidad || 1) || 1;
                 const unidad = (p['Unidad IA'] || p['Unidad_IA'] || p.unidad || p.Unidad || 'ud').trim();
-                lines.push(`~C|${code}|${unidad}|${desc}|${precioUd.toFixed(2)}||`);
+                lines.push(`~C|${code}|${unidad}|${desc}|${precioUd.toFixed(2)}|${fechaCorta}|0|`);
                 // ~T: descripción larga si es muy extensa (>80 chars)
                 if (desc.length > 80) {
                     lines.push(`~T|${code}|${desc}|`);
                 }
-                void cant; // cant se usa en ~D abajo
             }
-        });
-
-        // Construir árbol de descomposición ~D
-        const childrenOf = new Map([[projectId, []]]);
-        allItems.forEach(p => {
-            const code = (p.Capítulo || p.Capitulo || '').trim();
-            if (!code) return;
-            // La cantidad en ~D es la de la partida en su capítulo padre
-            const cant = parseFloat(p.Cantidad || p.cantidad || 1) || 1;
-            const parent = findParent(code);
-            if (!childrenOf.has(parent)) childrenOf.set(parent, []);
-            childrenOf.get(parent).push({ code, cant });
-            // Aseguramos entrada vacía para caps/subcaps que aún no tienen hijos añadidos
-            if (code.endsWith('#') && !childrenOf.has(code)) childrenOf.set(code, []);
         });
 
         // Emitir ~D para cada padre con hijos
         childrenOf.forEach((children, parent) => {
             if (!children.length) return;
             // Formato: ~D|Padre|Hijo\Cantidad\1\Hijo\Cantidad\1\...\|
-            const str = children.map(c => `${c.code}\\${c.cant.toFixed(3)}\\1`).join('\\');
+            // El "#" solo va en la línea ~C que DEFINE un capítulo/subcapítulo;
+            // como código de HIJO dentro de un ~D debe ir sin "#" (confirmado
+            // contra exports reales de Presto) o Presto no enlaza el árbol y
+            // trata cada concepto como huérfano, pidiendo código uno a uno.
+            const str = children.map(c => `${c.code.replace(/#+$/, '')}\\${c.cant.toFixed(3)}\\1`).join('\\');
             lines.push(`~D|${parent}|${str}\\|`);
         });
 
         return lines.join('\r\n');
     };
 
+    // new Blob([string]) codifica siempre a UTF-8 pase lo que pase en `type`.
+    // Los .bc3 (FIEBDC-3/95) se leen en ISO-8859-1 al importarlos (ver
+    // NuevoProyecto.jsx), así que hay que escribir esos mismos bytes o Presto
+    // muestra tildes/ñ corruptas al reabrir el .bc3 firmado.
+    const encodeIso88591 = (str) => {
+        const bytes = new Uint8Array(str.length);
+        for (let i = 0; i < str.length; i++) {
+            const code = str.charCodeAt(i);
+            bytes[i] = code < 256 ? code : 0x3F; // '?' si el carácter no es representable
+        }
+        return bytes;
+    };
+
     const downloadBC3 = (presupuesto) => {
         const content = generarBC3(presupuesto);
-        const blob = new Blob([content], { type: 'text/plain;charset=windows-1252' });
+        const blob = new Blob([encodeIso88591(content)], { type: 'text/plain;charset=windows-1252' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;

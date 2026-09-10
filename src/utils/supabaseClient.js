@@ -171,7 +171,7 @@ class QueryBuilder {
 export const supabase = {
     from: (table) => new QueryBuilder(table),
 
-    channel: (name) => ({
+    channel: (_name) => ({
         on: (_event, _filter, _cb) => ({
             subscribe: (_cb2) => ({ unsubscribe: () => {} }),
         }),

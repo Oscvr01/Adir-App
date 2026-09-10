@@ -139,7 +139,6 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
     if (itemsParaIA.length === 0) return { asignaciones: {}, sinProveedor: [] };
 
     const asignacionesFinales = {};
-    const oficiosConPro = new Set(proveedores.map(prov => prov.Oficio));
 
     // Construir los batches por adelantado para procesarlos en paralelo (con concurrencia limitada).
     const batches = [];

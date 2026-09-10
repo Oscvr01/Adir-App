@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useModal, useToast, Modal } from '../utils/useModal';
 import { Edit2, Trash2, Plus, Users, Search, Loader2, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../utils/supabaseClient';
+import { toHex } from '../utils/hash';
 
 const TIPOS_USUARIO = {
   0: 'Usuario / Resp. Obra',
@@ -11,12 +12,6 @@ const TIPOS_USUARIO = {
   2: 'Administración',
   3: 'Jefe de Obra'
 };
-
-// Convierte texto plano a hexadecimal (UTF-8) → "1234" = "31323334"
-const toHex = (str) =>
-  Array.from(new TextEncoder().encode(str))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 
 const EMPTY_FORM = {
   nombre: '',

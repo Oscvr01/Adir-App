@@ -3,6 +3,7 @@ import { UploadCloud, CheckCircle, Loader2, FileText, Hash, Euro, Layers, ArrowR
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../utils/supabaseClient';
 import { parseBC3 } from '../utils/bc3Parser';
+import { getTipoFila, calcularTotalPartidas } from '../utils/partidas';
 import { useToast } from '../utils/useModal';
 
 const NuevoProyecto = () => {
@@ -65,16 +66,17 @@ const NuevoProyecto = () => {
                 const text = e.target.result;
                 const allItems = parseBC3(text);
 
-                // Solo partidas (nodos hoja) para conteo y total
-                const soloPartidas = allItems.filter(p => p.nivel === 'partida');
-                // Capítulos raíz
-                const soloCapitulos = allItems.filter(p => p.nivel === 'capitulo');
+                // Clasificación unificada con Borradores (getTipoFila por marca '#'),
+                // para que el conteo y el total coincidan exactamente con el borrador.
+                const soloPartidas = allItems.filter(p => getTipoFila(p) === 'partida');
+                // Capítulos raíz, excluyendo el capítulo sintético de EXTRAS
+                // (partidas sueltas): no debe contarse en el resumen inicial.
+                const soloCapitulos = allItems.filter(
+                    p => getTipoFila(p) === 'capitulo' && p.Capítulo.replace(/#$/, '') !== '99_EXTRAS'
+                );
 
-                // Total: suma precio_unitario × cantidad de partidas
-                let totalEstimado = 0;
-                soloPartidas.forEach(p => {
-                    totalEstimado += (Number(p['Precio Total (€)']) || 0) * (Number(p.Cantidad) || 1);
-                });
+                // Total: misma fuente de verdad que Borradores (precio × cantidad de hojas)
+                const totalEstimado = calcularTotalPartidas(allItems);
 
                 // Agrupar partidas bajo su capítulo raíz (sea directo o a través de subcapítulo)
                 // Recorremos en orden DFS: cuando vemos un 'capitulo' actualizamos currentCap
@@ -82,11 +84,11 @@ const NuevoProyecto = () => {
                 const capMap = {};
                 let currentCapCod = null;
                 allItems.forEach(p => {
-                    if (p.nivel === 'capitulo') {
+                    if (getTipoFila(p) === 'capitulo') {
                         const cod = p.Capítulo.replace(/#$/, '');
                         currentCapCod = cod;
                         if (!capMap[cod]) capMap[cod] = { nombre: p.Descripción || cod, codigo: cod, count: 0, total: 0 };
-                    } else if (p.nivel === 'partida' && currentCapCod) {
+                    } else if (getTipoFila(p) === 'partida' && currentCapCod) {
                         const precio = (Number(p['Precio Total (€)']) || 0) * (Number(p.Cantidad) || 1);
                         capMap[currentCapCod].count++;
                         capMap[currentCapCod].total += precio;
@@ -133,6 +135,10 @@ const NuevoProyecto = () => {
         }
         if (clienteId === 'nuevo' && !nuevoCliente.nombre.trim()) {
             showToast('Indica el nombre del nuevo cliente.', 'warning');
+            return;
+        }
+        if (clienteId === 'nuevo' && !nuevoCliente.email.trim()) {
+            showToast('Hace falta añadir un correo electrónico para el cliente.', 'warning');
             return;
         }
 
@@ -382,7 +388,7 @@ const NuevoProyecto = () => {
                                 />
                                 <input
                                     type="email"
-                                    placeholder="Correo (opcional)"
+                                    placeholder="Correo electrónico"
                                     value={nuevoCliente.email}
                                     onChange={(e) => setNuevoCliente({ ...nuevoCliente, email: e.target.value })}
                                     style={{ padding: '10px 12px', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: '0.9rem' }}

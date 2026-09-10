@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { logoBase64 } from '../assets/logoBase64';
+import { cleanText as cleanDesc } from './escape';
 
 // ─── Colores corporativos ADIR (sincronizados con --primary: #002D54) ────────
 const AZUL        = [0, 45, 84];     // #002D54 — azul principal app
@@ -23,14 +24,6 @@ const getFilaTipoPDF = (p) => {
     if (limpio.includes('.')) return 'subcapitulo';
     return 'capitulo';
 };
-
-// Helper para limpiar descripciones en el PDF (eliminar prefijo de capítulo y caracteres de tubería '|')
-const cleanDesc = (text) => {
-    if (!text) return "";
-    const str = text.includes('::') ? text.split('::').slice(1).join('::') : text;
-    return str.replace(/\|/g, ' ').replace(/\s{2,}/g, ' ').trim();
-};
-
 
 /**
  * Genera un PDF de presupuesto con diseño corporativo ADIR unificado.
@@ -186,6 +179,13 @@ export function generarPresupuestoPDF(data) {
                     { content: precio.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: precio > 0 ? 'normal' : 'italic', textColor: precio > 0 ? GRIS_TEXTO : GRIS_MUTED } },
                     { content: total.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: total > 0 ? AZUL : GRIS_MUTED } },
                 ]);
+                // Comentario del jefe de obra: fila-nota que ocupa todo el ancho
+                const comentario = (p.comentario || '').trim();
+                if (comentario) {
+                    filas.push([
+                        { content: 'Comentario: ' + comentario, colSpan: 6, styles: { fontStyle: 'italic', fontSize: 8, textColor: GRIS_MUTED, fillColor: [248, 250, 252] } },
+                    ]);
+                }
             }
         } else {
             // ── MODO CAPS/SUBCAPS: 2 columnas (Descripción | Total) ──
@@ -197,8 +197,8 @@ export function generarPresupuestoPDF(data) {
                 ]);
             } else if (tipo === 'subcapitulo') {
                 filas.push([
-                    { content: '    ' + desc, styles: { fontStyle: 'bold', fillColor: SUB_FILL, textColor: SUB_TEXT, fontStyle: 'italic' } },
-                    { content: totalStr, styles: { fontStyle: 'bold', fillColor: SUB_FILL, textColor: SUB_TEXT, halign: 'right', fontStyle: 'italic', whiteSpace: 'nowrap' } },
+                    { content: '    ' + desc, styles: { fontStyle: 'bolditalic', fillColor: SUB_FILL, textColor: SUB_TEXT } },
+                    { content: totalStr, styles: { fontStyle: 'bolditalic', fillColor: SUB_FILL, textColor: SUB_TEXT, halign: 'right', whiteSpace: 'nowrap' } },
                 ]);
             }
         }

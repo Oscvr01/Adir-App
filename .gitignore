@@ -6,9 +6,11 @@ npm-debug.log*
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Build output
-dist/
+# NOTA: dist/ SÍ se versiona a propósito — es el artefacto que se sube a
+# Dinahosting (hosting estático). Rebuild con `npm run build` antes de subir.
 dist-ssr/
 
 # Vite cache
@@ -38,3 +40,7 @@ migracion_*.sql
 
 # Claude Code
 .claude/
+
+# Skills instaladas (caveman, ponytail) — herramientas de desarrollo, no app
+.agents/
+skills-lock.json

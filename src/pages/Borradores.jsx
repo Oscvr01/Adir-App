@@ -57,11 +57,12 @@ const DeadlineBadge = ({ fechaRef, compact = false }) => {
 };
 import { asignarProveedoresIA, TODOS_LOS_OFICIOS, getCleanProjectName } from '../utils/aiAllocation';
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
-import { escapeHtml } from '../utils/escape';
-import { normalizarYOrdenarPartidas, getTipoFila } from '../utils/partidas';
+import { escapeHtml, cleanText } from '../utils/escape';
+import { formatDecimal, parseDecimal, fmtEuro, aplicarBeneficio } from '../utils/format';
+import { normalizarYOrdenarPartidas, getTipoFila, calcularTotalPartidas } from '../utils/partidas';
 
 const Borradores = ({ sessionCache = {}, setSessionCache }) => {
-    const { showConfirm, ModalUI } = useModal();
+    const { ModalUI } = useModal();
     const { showToast, ToastUI } = useToast();
     const navigate = useNavigate();
 
@@ -74,6 +75,14 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     const [proveedores, setProveedores] = useState([]);
     const [loadingProject, setLoadingProject] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [defaultBeneficioPct, setDefaultBeneficioPct] = useState(0);
+    const [savingBeneficio, setSavingBeneficio] = useState(false);
+
+    // % de beneficio por defecto (Ajustes), cargado una vez.
+    useEffect(() => {
+        supabase.from('configuracion').select('valor').eq('clave', 'beneficio_pct').maybeSingle()
+            .then(({ data }) => { if (data?.valor) setDefaultBeneficioPct(parseFloat(data.valor) || 0); });
+    }, []);
 
     // Estado de la IA y Módulos Avanzados
     const [aiLoading, setAiLoading] = useState(false);
@@ -113,10 +122,6 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
         });
     };
 
-    const formatDecimal = (val) =>
-        (parseFloat(val) || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const parseDecimal = (str) =>
-        parseFloat((str || '0').replace(/\./g, '').replace(',', '.')) || 0;
 
     // Sincronizar cambios locales con la memoria de sesión global
     useEffect(() => {
@@ -300,11 +305,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             if (partidasData) {
                 const mappedPartidas = partidasData.map(p => {
                     const capCode = p.texto_partida ? p.texto_partida.split('::')[0] : "";
-                    const descClean = p.texto_partida
-                        ? (p.texto_partida.includes('::')
-                            ? p.texto_partida.split('::').slice(1).join('::')
-                            : p.texto_partida).replace(/\|/g, ' ').replace(/\s{2,}/g, ' ').trim()
-                        : "";
+                    const descClean = cleanText(p.texto_partida);
                     const finalPrice = (p.precio_adjudicado && parseFloat(p.precio_adjudicado) > 0) 
                         ? parseFloat(p.precio_adjudicado) 
                         : (p.precio_base_estimado || 0);
@@ -415,7 +416,12 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                 }
             }
 
-            // 2. Buscar en histórico (sin límite de fecha, todos los proyectos anteriores)
+            // 2. Buscar en histórico: SOLO partidas de menos de 3 años y priorizando
+            //    la más reciente, para no arrastrar precios ni ofertas obsoletos.
+            const limite3Anios = new Date();
+            limite3Anios.setFullYear(limite3Anios.getFullYear() - 3);
+            const fechaLimite = limite3Anios.toISOString().split('T')[0]; // YYYY-MM-DD
+
             const { data: propData, error: propError } = await supabase
                 .from('propuestas')
                 .select('Proyecto')
@@ -428,10 +434,15 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             if (!propError && propData && propData.length > 0) {
                 const { data: partData, error: partError } = await supabase
                     .from('partidas')
-                    .select('texto_partida, precio_adjudicado, precio_base_estimado, unidad')
-                    .in('propuesta_id', propData.map(p => p.Proyecto));
+                    .select('texto_partida, precio_adjudicado, precio_base_estimado, unidad, created_at')
+                    .in('propuesta_id', propData.map(p => p.Proyecto))
+                    .gte('created_at', fechaLimite)                 // < 3 años de antigüedad
+                    .order('created_at', { ascending: false });     // más reciente primero
 
                 if (!partError && partData) {
+                    // partData viene ordenado por created_at descendente, así que la
+                    // PRIMERA coincidencia por clave es la más reciente. El `if (!has)`
+                    // conserva esa primera → nos quedamos siempre con el precio más nuevo.
                     partData.forEach(p => {
                         const precio = parseFloat(p.precio_adjudicado) > 0
                             ? parseFloat(p.precio_adjudicado)
@@ -863,9 +874,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
 
     const handleDownloadPDF = () => {
         try {
-            const precioTotal = (partidas || [])
-                .filter(p => !p.Capítulo?.endsWith('#'))
-                .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)'] || 0) * (parseFloat(p.Cantidad) || 1)), 0);
+            const precioTotal = calcularTotalPartidas(partidas);
 
             const doc = generarPresupuestoPDF({
                 cliente:      activeProject.cliente || '',
@@ -911,10 +920,24 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
         finally { setLoadingProject(false); setShowReviewModal(false); }
     };
 
-    const budgetTotal = (partidas || []).reduce((acc, p) => {
-        if (getTipoFila(p) !== 'partida') return acc;
-        return acc + (parseFloat(p['Precio Total (€)'] || 0) * parseFloat(p.Cantidad || 1));
-    }, 0);
+    const budgetTotal = calcularTotalPartidas(partidas);
+    // % de beneficio efectivo del proyecto (override de la propuesta o el de Ajustes).
+    const beneficioPct = (activeProject?.beneficio_pct !== null && activeProject?.beneficio_pct !== undefined && activeProject?.beneficio_pct !== '')
+        ? parseFloat(activeProject.beneficio_pct)
+        : defaultBeneficioPct;
+
+    const guardarBeneficioProyecto = async (nuevoPct) => {
+        const pct = nuevoPct === '' ? null : parseFloat(String(nuevoPct).replace(',', '.'));
+        if (pct !== null && (isNaN(pct) || pct < 0 || pct > 100)) { showToast('% de beneficio inválido (0–100).', 'error'); return; }
+        setSavingBeneficio(true);
+        try {
+            const { error } = await supabase.from('propuestas').update({ beneficio_pct: pct }).eq('Proyecto', activeProject.Proyecto);
+            if (error) throw error;
+            setActiveProject(prev => ({ ...prev, beneficio_pct: pct }));
+            showToast('% de beneficio del proyecto guardado.');
+        } catch (e) { showToast('Error al guardar el %: ' + (e.message || e), 'error'); }
+        finally { setSavingBeneficio(false); }
+    };
     const listaOficios = ["Sin asignar", ...[...new Set([...TODOS_LOS_OFICIOS, ...proveedores.map(p => p.Oficio)])].sort()];
     const oficiosAsignados = [...new Set((partidas || []).map(p => p["Oficio Asignado"]).filter(o => o !== "Sin asignar"))];
 
@@ -1054,10 +1077,32 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                         gap: '20px',
                         background: 'linear-gradient(90deg, transparent, rgba(0,45,84,0.03))'
                     }}>
-                        <div style={{ textAlign: 'right' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Estimado Proyecto</div>
-                            <div style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
-                                {budgetTotal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span style={{ fontSize: '1.2rem', opacity: 0.7 }}>€</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 22 }}>
+                            <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Coste</div>
+                                <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-secondary)' }}>{fmtEuro(budgetTotal)}</div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Beneficio</div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                                    <input
+                                        key={activeProject?.Proyecto}
+                                        type="number" min="0" max="100" step="0.5"
+                                        defaultValue={activeProject?.beneficio_pct ?? ''}
+                                        placeholder={String(defaultBeneficioPct)}
+                                        onBlur={(e) => guardarBeneficioProyecto(e.target.value)}
+                                        disabled={savingBeneficio}
+                                        title="% de este proyecto (vacío = usa el de Ajustes)"
+                                        style={{ width: 64, padding: '5px 6px', textAlign: 'right', border: '1px solid var(--border-color)', borderRadius: 4, fontWeight: 700 }}
+                                    />
+                                    <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>%</span>
+                                </div>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>PVP Cliente</div>
+                                <div style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'flex-end' }}>
+                                    {fmtEuro(aplicarBeneficio(budgetTotal, beneficioPct))}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1186,8 +1231,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                                                 </td>
                                                 <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.88rem', verticalAlign: 'middle' }}>
                                                     {esPartida && (
-                                                        ((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
-                                                            .toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
+                                                        fmtEuro((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
                                                     )}
                                                 </td>
                                                 <td style={{ textAlign: 'right' }}>

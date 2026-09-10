@@ -2,19 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../utils/supabaseClient';
 import { N8N_BASE_URL } from '../config';
 import { useAuth } from '../context/AuthContext';
-import { useModal, useToast } from '../utils/useModal';
+import { useModal, useToast, Modal } from '../utils/useModal';
 import {
   Loader2, RefreshCw, HardHat, FileText, ArrowLeft, CheckCircle,
-  X, AlertCircle, Trophy, User, Calendar, Briefcase, Trash2
+  X, AlertCircle, Trophy, User, Calendar, Briefcase, Trash2, MessageSquare
 } from 'lucide-react';
 import { TODOS_LOS_OFICIOS, getCleanProjectName } from '../utils/aiAllocation';
-import { escapeHtml } from '../utils/escape';
+import { escapeHtml, cleanText } from '../utils/escape';
+import { formatDecimal, parseDecimal, fmtEuro, aplicarBeneficio } from '../utils/format';
 import { normalizarYOrdenarPartidas, getTipoFila } from '../utils/partidas';
 
 const JefesObra = () => {
     const { user } = useAuth();
     const { showAlert, ModalUI } = useModal();
     const { showToast, ToastUI } = useToast();
+    // Popup de comentario por partida: { idx, texto } o null
+    const [comentarioModal, setComentarioModal] = useState(null);
+    const [guardandoComentario, setGuardandoComentario] = useState(false);
 
     const esAdmin = user?.tipo_usuario === 1;
 
@@ -41,11 +45,40 @@ const JefesObra = () => {
     const [deleting, setDeleting] = useState(false);
     const [rawInputs, setRawInputs] = useState({});
     const [oficiosDinamicos, setOficiosDinamicos] = useState(TODOS_LOS_OFICIOS);
+    const [defaultBeneficioPct, setDefaultBeneficioPct] = useState(0);
+    const [savingBeneficio, setSavingBeneficio] = useState(false);
 
-    const formatDecimal = (val) =>
-        (parseFloat(val) || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const parseDecimal = (str) =>
-        parseFloat((str || '0').replace(/\./g, '').replace(',', '.')) || 0;
+    // % de beneficio efectivo del proyecto: override de la propuesta o el de Ajustes.
+    const beneficioPct = (activeProject?.beneficio_pct !== null && activeProject?.beneficio_pct !== undefined && activeProject?.beneficio_pct !== '')
+        ? parseFloat(activeProject.beneficio_pct)
+        : defaultBeneficioPct;
+
+    // Cargar el % de beneficio por defecto (Ajustes) una vez al montar.
+    useEffect(() => {
+        supabase.from('configuracion').select('valor').eq('clave', 'beneficio_pct').maybeSingle()
+            .then(({ data }) => { if (data?.valor) setDefaultBeneficioPct(parseFloat(data.valor) || 0); });
+    }, []);
+
+    // Guarda el % de beneficio del proyecto (override) en la propuesta.
+    const guardarBeneficioProyecto = async (nuevoPct) => {
+        const pct = nuevoPct === '' ? null : parseFloat(String(nuevoPct).replace(',', '.'));
+        if (pct !== null && (isNaN(pct) || pct < 0 || pct > 100)) {
+            showToast('% de beneficio inválido (0–100).', 'error');
+            return;
+        }
+        setSavingBeneficio(true);
+        try {
+            const { error } = await supabase.from('propuestas').update({ beneficio_pct: pct }).eq('Proyecto', activeProject.Proyecto);
+            if (error) throw error;
+            setActiveProject(prev => ({ ...prev, beneficio_pct: pct }));
+            showToast('% de beneficio del proyecto guardado.');
+        } catch (e) {
+            showToast('Error al guardar el %: ' + (e.message || e), 'error');
+        } finally {
+            setSavingBeneficio(false);
+        }
+    };
+
 
     const fetchProyectos = React.useCallback(async () => {
         setLoading(true);
@@ -157,7 +190,7 @@ const JefesObra = () => {
             
             const mapped = (pData || []).map(p => {
                 const capCode = p.texto_partida ? p.texto_partida.split('::')[0] : "";
-                const descClean = p.texto_partida ? (p.texto_partida.includes('::') ? p.texto_partida.split('::').slice(1).join('::') : p.texto_partida).replace(/\|/g, ' ').replace(/\s{2,}/g, ' ').trim() : "";
+                const descClean = cleanText(p.texto_partida);
                 const finalPrice = (p.precio_adjudicado && parseFloat(p.precio_adjudicado) > 0)
                     ? parseFloat(p.precio_adjudicado)
                     : (p.precio_base_estimado || 0);
@@ -386,13 +419,17 @@ const JefesObra = () => {
 
     // Sanitiza una partida antes de guardarla en la BD — elimina todos los campos
     // de estado React que no necesita el portal del cliente ni el PDF.
+    // El precio del cliente = coste × (1 + beneficio%). El margen se incrusta aquí,
+    // al congelar el snapshot que verá el cliente (precio_total_capitulo ya viene
+    // con beneficio aplicado desde totalesCapitulos).
     const sanitizarPartidaParaBD = (p) => ({
         Capítulo:            p.Capítulo || '',
         Descripción:         p.Descripción || '',
         Cantidad:            parseFloat(p.Cantidad) || 0,
         'Unidad IA':         p['Unidad IA'] || p.unidad || '',
-        precio_adjudicado:   parseFloat(p['Precio Total (€)']) || 0,
+        precio_adjudicado:   aplicarBeneficio(parseFloat(p['Precio Total (€)']) || 0, beneficioPct),
         precio_total_capitulo: parseFloat(p.precio_total_capitulo) || 0,
+        comentario:          p.comentario || '',
     });
 
     // modoPortal: 'capitulos' | 'desglose' → qué datos se guardan en Supabase para el formulario de firma
@@ -454,12 +491,16 @@ const JefesObra = () => {
 
             // ─── Crear presupuesto para cliente y enviar email ───
             const token = crypto.randomUUID();
-            const precioTotal = partidas
+            const precioTotalCoste = partidas
                 .filter(p => !p.Capítulo?.endsWith('#'))
                 .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1), 0);
+            // El cliente ve el PVP: coste + beneficio incrustado.
+            const precioTotal = aplicarBeneficio(precioTotalCoste, beneficioPct);
 
-            // Calcular totales por capítulo de forma explícita (no depende de índices)
-            const totalesCapitulos = calcularTotalesCapitulos(partidas);
+            // Totales por capítulo con el beneficio ya incrustado (snapshot y email).
+            const totalesCoste = calcularTotalesCapitulos(partidas);
+            const totalesCapitulos = {};
+            for (const k in totalesCoste) totalesCapitulos[k] = aplicarBeneficio(totalesCoste[k], beneficioPct);
 
             // Enriquecer todos los headers con su total calculado
             const partidasParaCliente = partidas.map(p => {
@@ -668,8 +709,8 @@ const JefesObra = () => {
                             .filter(p => !p.Capítulo?.endsWith('#'))
                             .map(p => ({
                                 texto_partida: (p.Capítulo || 'S/C') + '::' + (p.Descripción || p.texto_partida || 'Sin descripcion'),
-                                precio_adjudicado: parseFloat(p['Precio Total (€)']) || 0,
-                                precio_base_estimado: parseFloat(p['Precio Total (€)']) || 0,
+                                precio_adjudicado: aplicarBeneficio(parseFloat(p['Precio Total (€)']) || 0, beneficioPct),
+                                precio_base_estimado: aplicarBeneficio(parseFloat(p['Precio Total (€)']) || 0, beneficioPct),
                                 cantidad: parseFloat(p.Cantidad) || 1,
                                 unidad: p['Unidad IA'] || p.unidad || 'ud'
                             }))
@@ -730,10 +771,62 @@ const JefesObra = () => {
         ? proyectos.filter(p => p.jefe_obra === jefeSeleccionado)
         : proyectos;
 
+    // Guarda el comentario de una partida de inmediato en BD (modo elegido:
+    // persistir al cerrar el popup, sin esperar al Guardar general).
+    // Requiere la columna `comentario` en ctcon_partidas (ver migración).
+    const guardarComentario = async (idx, texto) => {
+        const t = (texto || '').trim();
+        const p = partidas[idx];
+        setGuardandoComentario(true);
+        try {
+            if (p?.id && !p._synthetic) {
+                const { error } = await supabase.from('partidas').update({ comentario: t }).eq('id', p.id);
+                if (error) throw error;
+            }
+            // Solo tras confirmar en BD: el botón pasa a verde de verdad.
+            setPartidas(prev => {
+                const copy = [...prev];
+                copy[idx] = { ...copy[idx], comentario: t };
+                return copy;
+            });
+            showToast(t ? 'Comentario guardado.' : 'Comentario eliminado.', 'success');
+            setComentarioModal(null);
+        } catch (e) {
+            showToast('Error al guardar el comentario: ' + (e.message || e), 'error');
+        } finally {
+            setGuardandoComentario(false);
+        }
+    };
+
     return (
         <div>
             {ModalUI}
             {ToastUI}
+            {comentarioModal && (
+                <Modal
+                    title="Comentario de la partida"
+                    icon={<MessageSquare size={20} color="var(--primary)" />}
+                    onClose={() => !guardandoComentario && setComentarioModal(null)}
+                    maxWidth={480}
+                    footer={<>
+                        <button className="btn btn-secondary" onClick={() => setComentarioModal(null)} disabled={guardandoComentario}>Cancelar</button>
+                        <button className="btn btn-primary" onClick={() => guardarComentario(comentarioModal.idx, comentarioModal.texto)} disabled={guardandoComentario} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {guardandoComentario && <Loader2 size={14} className="loader-spinner" />} Guardar comentario
+                        </button>
+                    </>}
+                >
+                    <p style={{ margin: '0 0 12px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                        Quedará asociado a la partida (se reflejará en el presupuesto del cliente).
+                    </p>
+                    <textarea
+                        autoFocus
+                        value={comentarioModal.texto}
+                        onChange={(e) => setComentarioModal(m => ({ ...m, texto: e.target.value }))}
+                        placeholder="Escribe aquí el comentario…"
+                        style={{ width: '100%', minHeight: 120, padding: 10, borderRadius: 8, border: '1px solid var(--border-color)', fontSize: '0.9rem', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+                    />
+                </Modal>
+            )}
             <div className="animate-fade-in">
                 {activeProject ? (
                     /* ─── VISTA DETALLE DEL PROYECTO ─── */
@@ -784,12 +877,35 @@ const JefesObra = () => {
                                 <span style={{ fontWeight: 600, color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
                                     Total presupuesto ({partidas.filter(p => !p.Capítulo?.endsWith('#')).length} partidas)
                                 </span>
-                                <span style={{ fontWeight: 800, fontSize: '1.4rem', color: 'var(--primary)' }}>
-                                    {partidas
+                                {(() => {
+                                    const costeTotal = partidas
                                         .filter(p => !p.Capítulo?.endsWith('#'))
-                                        .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1), 0)
-                                        .toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                                </span>
+                                        .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1), 0);
+                                    return (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+                                            <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                                                Coste: <strong>{fmtEuro(costeTotal)}</strong>
+                                            </span>
+                                            <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                                                Beneficio
+                                                <input
+                                                    key={activeProject.Proyecto}
+                                                    type="number" min="0" max="100" step="0.5"
+                                                    defaultValue={activeProject.beneficio_pct ?? ''}
+                                                    placeholder={String(defaultBeneficioPct)}
+                                                    onBlur={(e) => guardarBeneficioProyecto(e.target.value)}
+                                                    disabled={savingBeneficio}
+                                                    title="% de beneficio de este proyecto (vacío = usa el de Ajustes)"
+                                                    style={{ width: 62, padding: '4px 6px', textAlign: 'right', border: '1px solid var(--border-color)', borderRadius: 4 }}
+                                                />
+                                                %
+                                            </span>
+                                            <span style={{ fontWeight: 800, fontSize: '1.4rem', color: 'var(--primary)' }}>
+                                                PVP: {fmtEuro(aplicarBeneficio(costeTotal, beneficioPct))}
+                                            </span>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         )}
 
@@ -852,7 +968,23 @@ const JefesObra = () => {
                                                             )}
                                                         </td>
                                                         <td style={codStyle}>{capClean}</td>
-                                                        <td style={descStyle}>{p.Descripción}</td>
+                                                        <td style={descStyle}>
+                                                            {p.Descripción}
+                                                            {esPartida && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setComentarioModal({ idx, texto: p.comentario || '' })}
+                                                                    title={(p.comentario && p.comentario.trim()) ? 'Editar comentario' : 'Añadir comentario'}
+                                                                    style={{
+                                                                        marginLeft: 8, background: 'none', border: 'none', cursor: 'pointer',
+                                                                        padding: 2, verticalAlign: 'middle', lineHeight: 0,
+                                                                        color: (p.comentario && p.comentario.trim()) ? '#16a34a' : '#9ca3af'
+                                                                    }}
+                                                                >
+                                                                    <MessageSquare size={16} />
+                                                                </button>
+                                                            )}
+                                                        </td>
                                                         <td style={{ textAlign: 'center', fontSize: '0.8rem', verticalAlign: 'middle' }}>
                                                             {esPartida && (
                                                                 <input
@@ -928,8 +1060,7 @@ const JefesObra = () => {
                                                         </td>
                                                         <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.85rem', verticalAlign: 'middle' }}>
                                                             {esPartida && (
-                                                                ((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
-                                                                    .toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'
+                                                                fmtEuro((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
                                                             )}
                                                         </td>
                                                     </tr>
