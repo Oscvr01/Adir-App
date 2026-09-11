@@ -219,7 +219,7 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                 body: JSON.stringify({
-                    model: 'openai/gpt-oss-20b',
+                    model: 'groq/compound-mini',
                     messages: [
                         { role: 'system', content: 'You are a JSON generator. You MUST respond ONLY with a raw, valid JSON object without markdown formatting or introductory text.' },
                         { role: 'user', content: prompt }
