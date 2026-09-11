@@ -21,9 +21,9 @@ export const getCleanProjectName = (proyectoId) => {
 };
 
 const BATCH_SIZE = 6;
-// Nº de batches que se envían en paralelo a Mistral. 3 es seguro contra rate-limits
-// y reduce el tiempo total ~3× respecto al envío secuencial.
-const PARALLEL_BATCHES = 3;
+// Reducimos a 1 para evitar rate limits en la capa gratuita de Mistral
+const PARALLEL_BATCHES = 1;
+const delay = ms => new Promise(res => setTimeout(res, ms));
 
 /**
  * Búsqueda en históricos adjudicados. Devuelve { context, unidad }.
@@ -220,16 +220,28 @@ Responde ÚNICAMENTE con JSON válido:
 PAQUETE DE EVALUACIÓN:
 ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
 
-        const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-            body: JSON.stringify({
-                model: 'mistral-small-latest',
-                messages: [{ role: 'user', content: prompt }],
-                temperature: 0.1,
-                response_format: { type: 'json_object' }
-            })
-        });
+        let response;
+        let retries = 3;
+        while (retries > 0) {
+            response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+                body: JSON.stringify({
+                    model: 'mistral-small-latest',
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1,
+                    response_format: { type: 'json_object' }
+                })
+            });
+            
+            if (response.status === 429) {
+                retries--;
+                if (retries === 0) break;
+                await delay(2000); // Wait 2 seconds before retry
+            } else {
+                break;
+            }
+        }
 
         if (response.ok) {
             const data = await response.json();
@@ -277,6 +289,9 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
         await Promise.all(slice.map(procesarBatch));
         procesados += slice.reduce((s, b) => s + b.length, 0);
         onProgress?.({ status: 'progress', progress: Math.round((procesados / itemsParaIA.length) * 100) });
+        if (i + PARALLEL_BATCHES < batches.length) {
+            await delay(1000); // Wait 1 second between batches to avoid rate limits
+        }
     }
 
     return { asignaciones: asignacionesFinales, sinProveedor: [] };
