@@ -247,7 +247,7 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                         : (info.unidad && info.unidad !== 'null' ? info.unidad : null);
                     const unidad_por_ia = !ctx.tieneUnidadPrevia && !!unidadFinal;
 
-                    asignacionesFinales[item.cap] = {
+                    asignacionesFinales[item.id] = {
                         oficio: info.oficio,
                         precio: info.precio || 0,
                         unidad: unidadFinal,

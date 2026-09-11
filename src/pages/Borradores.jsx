@@ -534,7 +534,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             let aplicadas = 0;
             const nuevasPartidas = partidas.map(p => {
                 if (p.Capítulo && p.Capítulo.endsWith('#')) return p;
-                const info = resultado.asignaciones[p.Capítulo];
+                const info = resultado.asignaciones[p.id];
                 if (info && info.oficio && info.oficio !== "Sin asignar") {
                     aplicadas++;
                     // Unidad: solo se asigna si el campo está vacío.
