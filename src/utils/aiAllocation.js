@@ -94,20 +94,8 @@ const getAdirContext = async (descripcion) => {
 };
 
 export const asignarProveedoresIA = async (partidas, proveedores, onProgress) => {
-    let oficiosDisponibles;
-    try {
-        const { data: provData } = await supabase.from('proveedores').select('oficio_principal');
-        const oficiosActivos = provData && provData.length > 0
-            ? provData.map(p => p.oficio_principal).filter(Boolean)
-            : [];
-        // Filtrar para usar únicamente oficios que tienen al menos un proveedor
-        const oficiosConProveedor = [...new Set(oficiosActivos)].sort();
-        oficiosDisponibles = oficiosConProveedor.length > 0
-            ? oficiosConProveedor.join(', ')
-            : TODOS_LOS_OFICIOS.join(', ');
-    } catch (_) {
-        oficiosDisponibles = TODOS_LOS_OFICIOS.join(', ');
-    }
+    // Usamos TODOS_LOS_OFICIOS para asegurar una clasificación técnica precisa de cada partida
+    const oficiosDisponibles = TODOS_LOS_OFICIOS.join(', ');
 
     // Fast path: localStorage cache
     let apiKey = localStorage.getItem('groq_api_key');
