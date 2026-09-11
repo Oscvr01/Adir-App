@@ -110,18 +110,18 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
     }
 
     // Fast path: localStorage cache
-    let apiKey = localStorage.getItem('mistral_api_key');
+    let apiKey = localStorage.getItem('groq_api_key');
     if (!apiKey || apiKey.length < 10) {
         // Fallback: read from Supabase configuracion table (cloud storage)
         try {
             const { data } = await supabase
                 .from('configuracion')
                 .select('valor')
-                .eq('clave', 'mistral_api_key')
+                .eq('clave', 'groq_api_key')
                 .maybeSingle();
             if (data?.valor && data.valor.length > 10) {
                 apiKey = data.valor;
-                localStorage.setItem('mistral_api_key', apiKey);
+                localStorage.setItem('groq_api_key', apiKey);
             }
         } catch (_) {}
     }
@@ -225,11 +225,11 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
         let attempt = 0;
 
         while (attempt <= maxRetries) {
-            response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                 body: JSON.stringify({
-                    model: 'mistral-small-latest',
+                    model: 'llama-3.3-70b-versatile',
                     messages: [{ role: 'user', content: prompt }],
                     temperature: 0.1,
                     response_format: { type: 'json_object' }
@@ -241,7 +241,7 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                 if (attempt > maxRetries) break;
                 // Exponencial backoff: 3s, 6s, 12s, 24s, 30s
                 const backoffMs = Math.min(30000, 3000 * Math.pow(2, attempt - 1));
-                console.warn(`[Mistral AI] Rate limit (429) alcanzado. Reintentando en ${backoffMs / 1000}s (Intento ${attempt}/${maxRetries})...`);
+                console.warn(`[Groq AI] Rate limit (429) alcanzado. Reintentando en ${backoffMs / 1000}s (Intento ${attempt}/${maxRetries})...`);
                 await delay(backoffMs);
             } else {
                 break;
@@ -284,9 +284,9 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
         } else {
             const errText = await response.text();
             if (response.status === 429) {
-                throw new Error("Límite de peticiones de Mistral alcanzado (Rate Limit 429). La cuota gratuita de Mistral requiere esperar unos segundos. Vuelve a intentarlo en 1 minuto.");
+                throw new Error("Límite de peticiones de Groq alcanzado (Rate Limit 429). La cuota gratuita requiere esperar unos segundos. Vuelve a intentarlo en 1 minuto.");
             }
-            throw new Error(`Mistral API Error (${response.status}): ${errText}`);
+            throw new Error(`Groq API Error (${response.status}): ${errText}`);
         }
     };
 

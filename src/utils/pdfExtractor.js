@@ -280,9 +280,9 @@ export async function extraerPartidasDePDF(file) {
   return parsearPartidasDePDF(lineas);
 }
 
-// ── Extractor IA con Mistral ──────────────────────────────────────────────────
+// ── Extractor IA con Groq ──────────────────────────────────────────────────
 
-const MISTRAL_CHUNK_LINES = 55; // líneas por llamada a Mistral (~2 000 tokens)
+const GROQ_CHUNK_LINES = 55; // líneas por llamada a Groq (~2 000 tokens)
 const PARALLEL_CHUNKS     = 3;  // chunks que se envían en paralelo (rate-limit seguro)
 
 const PROMPT_SISTEMA = `Eres un experto en bases de precios de construcción española.
@@ -303,9 +303,9 @@ Responde ÚNICAMENTE con JSON válido (sin texto extra):
 Si no hay partidas en este fragmento: {"partidas": []}`;
 
 /**
- * Extrae partidas de un PDF usando Mistral como motor de comprensión.
+ * Extrae partidas de un PDF usando Groq como motor de comprensión.
  * @param {File}     file       — archivo PDF
- * @param {string}   apiKey     — Mistral API key
+ * @param {string}   apiKey     — Groq API key
  * @param {function} onProgress — callback(pct: 0-100)
  * @returns {Promise<Array>}    — [{descripcion_corta, unidad, precio_total, pagina}]
  */
@@ -317,25 +317,25 @@ export async function extraerPartidasDePDFConIA(file, apiKey, onProgress) {
     .map(l => l.lineText)
     .filter(t => t.length >= 5 && !SKIP_PATTERNS.some(re => re.test(t.trim())));
 
-  const totalChunks = Math.ceil(textoLineas.length / MISTRAL_CHUNK_LINES);
+  const totalChunks = Math.ceil(textoLineas.length / GROQ_CHUNK_LINES);
   const partidas = [];
 
   // Procesa un chunk individual y devuelve el array de partidas extraídas.
   const procesarChunk = async (ci) => {
     const chunk = textoLineas
-      .slice(ci * MISTRAL_CHUNK_LINES, (ci + 1) * MISTRAL_CHUNK_LINES)
+      .slice(ci * GROQ_CHUNK_LINES, (ci + 1) * GROQ_CHUNK_LINES)
       .join('\n');
 
     const resultado = [];
     try {
-      const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'mistral-small-latest',
+          model: 'llama-3.3-70b-versatile',
           messages: [
             { role: 'system', content: PROMPT_SISTEMA },
             { role: 'user',   content: `TEXTO DEL PDF (fragmento ${ci + 1}/${totalChunks}):\n${chunk}` },

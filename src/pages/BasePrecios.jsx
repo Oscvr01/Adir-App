@@ -171,16 +171,16 @@ function ModalImport({ onClose, onImportDone, showToast }) {
         const text = await readFileAsLatin1(file);
         filas = bc3ToBasePrecios(text);
       } else {
-        // PDF — intentar con Mistral IA, fallback a heurístico
-        let apiKey = localStorage.getItem('mistral_api_key');
+        // PDF — intentar con Groq IA, fallback a heurístico
+        let apiKey = localStorage.getItem('groq_api_key');
         if (!apiKey || apiKey.length < 10) {
           try {
             const { data: cfgData } = await supabase
               .from('configuracion').select('valor')
-              .eq('clave', 'mistral_api_key').maybeSingle();
+              .eq('clave', 'groq_api_key').maybeSingle();
             if (cfgData?.valor && cfgData.valor.length > 10) {
               apiKey = cfgData.valor;
-              localStorage.setItem('mistral_api_key', apiKey);
+              localStorage.setItem('groq_api_key', apiKey);
             }
           } catch (_) {}
         }
@@ -414,7 +414,7 @@ function ModalImport({ onClose, onImportDone, showToast }) {
             {usingAI ? (
               <>
                 <p style={{ color: 'var(--text-muted)', margin: 0, fontWeight: 600 }}>
-                  Analizando PDF con Mistral IA…
+                  Analizando PDF con Groq IA…
                 </p>
                 <div style={{ width: '220px', margin: '14px auto 0', background: '#e5e7eb', borderRadius: '99px', height: '8px' }}>
                   <div style={{ width: `${aiProgress}%`, background: 'var(--primary)', height: '8px', borderRadius: '99px', transition: 'width 0.4s' }} />
