@@ -20,7 +20,7 @@ export const getCleanProjectName = (proyectoId) => {
         .trim();
 };
 
-const BATCH_SIZE = 6;
+const BATCH_SIZE = 15;
 // Reducimos a 1 para evitar rate limits en la capa gratuita de Mistral
 const PARALLEL_BATCHES = 1;
 const delay = ms => new Promise(res => setTimeout(res, ms));
@@ -221,8 +221,10 @@ PAQUETE DE EVALUACIÓN:
 ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
 
         let response;
-        let retries = 3;
-        while (retries > 0) {
+        let maxRetries = 5;
+        let attempt = 0;
+
+        while (attempt <= maxRetries) {
             response = await fetch('https://api.mistral.ai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
@@ -233,11 +235,14 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                     response_format: { type: 'json_object' }
                 })
             });
-            
+
             if (response.status === 429) {
-                retries--;
-                if (retries === 0) break;
-                await delay(2000); // Wait 2 seconds before retry
+                attempt++;
+                if (attempt > maxRetries) break;
+                // Exponencial backoff: 3s, 6s, 12s, 24s, 30s
+                const backoffMs = Math.min(30000, 3000 * Math.pow(2, attempt - 1));
+                console.warn(`[Mistral AI] Rate limit (429) alcanzado. Reintentando en ${backoffMs / 1000}s (Intento ${attempt}/${maxRetries})...`);
+                await delay(backoffMs);
             } else {
                 break;
             }
@@ -278,6 +283,9 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
             });
         } else {
             const errText = await response.text();
+            if (response.status === 429) {
+                throw new Error("Límite de peticiones de Mistral alcanzado (Rate Limit 429). La cuota gratuita de Mistral requiere esperar unos segundos. Vuelve a intentarlo en 1 minuto.");
+            }
             throw new Error(`Mistral API Error (${response.status}): ${errText}`);
         }
     };
@@ -290,7 +298,7 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
         procesados += slice.reduce((s, b) => s + b.length, 0);
         onProgress?.({ status: 'progress', progress: Math.round((procesados / itemsParaIA.length) * 100) });
         if (i + PARALLEL_BATCHES < batches.length) {
-            await delay(1000); // Wait 1 second between batches to avoid rate limits
+            await delay(2500); // Esperar 2.5 segundos entre lotes para respetar el rate limit de Mistral
         }
     }
 
