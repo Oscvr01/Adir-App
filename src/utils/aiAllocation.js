@@ -237,7 +237,14 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
             const lote = content.asignaciones || {};
 
             batch.forEach((item, batchIdx) => {
-                const info = lote[item.id];
+                let info = lote[item.id];
+                
+                // Fallback in case Mistral altered the key slightly
+                if (!info) {
+                    const matchedKey = Object.keys(lote).find(k => k.includes(item.id) || item.id.includes(k));
+                    if (matchedKey) info = lote[matchedKey];
+                }
+
                 if (info && info.oficio && info.oficio !== "Sin asignar") {
                     const ctx = bloquesContexto[batchIdx];
                     // Si ya había unidad previa (BC3/manual/histórico), respetarla siempre.
@@ -257,6 +264,9 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                     };
                 }
             });
+        } else {
+            const errText = await response.text();
+            throw new Error(`Mistral API Error (${response.status}): ${errText}`);
         }
     };
 
