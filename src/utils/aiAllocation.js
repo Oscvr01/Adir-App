@@ -207,15 +207,17 @@ REGLAS PARA ASIGNAR UNIDAD DE MEDIDA:
   h  = horas de trabajo (trabajos extra, jornadas...)
   kg = peso (acero, ferralla...)
 
-Responde ÚNICAMENTE con JSON válido:
-{"asignaciones": {
-  "<TAREA ID>": {
-    "oficio": "<oficio de la lista>",
-    "precio": <numero sin simbolo €>,
-    "unidad": "<m2/ml/m3/ud/pa/h/kg o null si ya tenia UNIDAD>",
-    "justificacion": "<Base ADIR / Histórico / CYPE / Estimación — una línea>"
+Responde ÚNICAMENTE con la estructura JSON exacta (sin bloques de código markdown ni texto adicional):
+{
+  "asignaciones": {
+    "ID_EJEMPLO": {
+      "oficio": "Albañilería",
+      "precio": 25.50,
+      "unidad": "m2",
+      "justificacion": "Estimación de mercado"
+    }
   }
-}}
+}
 
 PAQUETE DE EVALUACIÓN:
 ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
@@ -230,7 +232,10 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                 body: JSON.stringify({
                     model: 'openai/gpt-oss-20b',
-                    messages: [{ role: 'user', content: prompt }],
+                    messages: [
+                        { role: 'system', content: 'You are a JSON generator. You MUST respond ONLY with a raw, valid JSON object without markdown formatting or introductory text.' },
+                        { role: 'user', content: prompt }
+                    ],
                     temperature: 0.1,
                     response_format: { type: 'json_object' }
                 })
