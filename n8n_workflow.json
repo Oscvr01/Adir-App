@@ -1,0 +1,1242 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "downloadAttachments": true,
+        "dataPropertyAttachmentsPrefixName": "attachment_0",
+        "options": {}
+      },
+      "id": "dfc68211-3d8d-47e6-bd7e-81d21b4b08c7",
+      "name": "EmailRead Imap1",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        1648
+      ],
+      "credentials": {
+        "imap": {
+          "id": "tAdFze1zdTGhKnzz",
+          "name": "IMAP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4dde3dd8-154a-413b-9a87-1350777d1863",
+              "leftValue": "={{ $binary.attachment_00.fileExtension }}",
+              "rightValue": "bc3",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b97f74d-55d8-44ac-8ca0-57bacdacea31",
+      "name": "Filtrar BC3",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        2864,
+        1648
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "attachment_00",
+        "options": {
+          "encoding": "=\"windows1252\""
+        }
+      },
+      "id": "7204e719-2742-4ace-962c-7d911dceee9b",
+      "name": "Extraer Fichero BC3",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        3088,
+        1648
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let nombreArchivo = \"\";\ntry {\n  const binaryData = $input.item.binary || {};\n  const attachmentKey = Object.keys(binaryData).find(k => k.startsWith('attachment')) || null;\n  const infoArchivo = attachmentKey ? binaryData[attachmentKey] : null;\n  nombreArchivo = infoArchivo ? (infoArchivo.fileName || infoArchivo.filename || infoArchivo.name || \"\") : \"\";\n} catch(e) {}\nif (!nombreArchivo) {\n  try {\n    const emailBinary = $node[\"EmailRead Imap1\"].binary || {};\n    const emailKey = Object.keys(emailBinary).find(k => k.startsWith('attachment')) || null;\n    const emailInfo = emailKey ? emailBinary[emailKey] : null;\n    nombreArchivo = emailInfo ? (emailInfo.fileName || emailInfo.filename || emailInfo.name || \"\") : \"\";\n  } catch(e) {}\n}\nif (!nombreArchivo) nombreArchivo = \"Presupuesto_Sin_Titulo\";\nconst tituloLimpio = nombreArchivo.replace(/\\.[^/.]+$/, \"\").trim() || \"Presupuesto\";\nconst idUnico = tituloLimpio + \"_\" + Math.floor(Date.now() / 1000);\nlet emailRemitente = \"Desconocido\";\ntry {\n  const from = $node[\"EmailRead Imap1\"].json.from;\n  if (typeof from === 'string') { const m = from.match(/<([^>]+)>/); emailRemitente = m ? m[1] : from; }\n  else if (from?.value?.[0]?.address) { emailRemitente = from.value[0].address; }\n  else if (from?.text) { const m = from.text.match(/<([^>]+)>/); emailRemitente = m ? m[1] : from.text; }\n  else if (from?.address) { emailRemitente = from.address; }\n} catch(e) { emailRemitente = \"Desconocido\"; }\nconst archivoTexto = $input.item.json.data || \"\";\nconst lines = archivoTexto.split(/\\r?\\n/);\nconst conceptos = {};\nconst relaciones = [];\nfor (const line of lines) {\n  if (!line.trim()) continue;\n  const parts = line.split('|');\n  const tag = parts[0];\n  if (tag === '~C') {\n    const codigo = parts[1]?.trim() || \"S/C\";\n    const unidad = parts[2]?.trim() || \"\";\n    let precio = parseFloat(parts[4]?.replace(',', '.') || '0');\n    conceptos[codigo] = { Capitulo: codigo, Unidad: unidad, Descripcion: parts[3]?.trim() || 'Sin descripcion', Precio: isNaN(precio) ? 0 : precio, conceptos: [] };\n  } else if (tag === '~D') {\n    const padre = parts[1]?.trim();\n    let raw_hijos = parts[2] ? parts[2].trim() : '';\n    if (raw_hijos.endsWith('\\\\')) raw_hijos = raw_hijos.slice(0, -1);\n    const items = raw_hijos.split('\\\\');\n    for (let i = 0; i < items.length; i += 3) {\n      if (items[i]) relaciones.push([padre, items[i].trim(), parseFloat(items[i+1]?.replace(',', '.') || '1') * parseFloat(items[i+2]?.replace(',', '.') || '0')]);\n    }\n  }\n}\nconst hijos = new Set();\nfor (const [p, h, q] of relaciones) {\n  if (conceptos[p] && conceptos[h]) { conceptos[p].conceptos.push({ ...conceptos[h], Cantidad: q }); hijos.add(h); }\n}\nconst filas = [];\nconst flatten = (arr) => {\n  for (const c of arr) {\n    if (!c.Capitulo) continue;\n    filas.push({ propuesta_id: idUnico, texto_partida: (c.Capitulo || \"S/C\") + '::' + (c.Descripcion || \"Sin descripcion\"), unidad: c.Unidad || \"\", cantidad: c.Cantidad || 0, precio_base_estimado: c.Precio || 0 });\n    if (c.conceptos && c.conceptos.length > 0) flatten(c.conceptos);\n  }\n};\nconst raices = Object.values(conceptos).filter(c => !hijos.has(c.Capitulo));\nflatten(raices);\nreturn [{ json: { propuesta_maestra: { Proyecto: idUnico, cliente: emailRemitente, estado: 'Pendiente', fecha_recepcion: new Date().toISOString() }, partidas_hijas: filas } }];"
+      },
+      "id": "d051a783-cc90-454b-b40d-fd2c3289c006",
+      "name": "Parsear FIEBDC a JSON1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3312,
+        1648
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM ctcon_partidas WHERE propuesta_bc3 = '{{ $input.item.json.propuesta_maestra.Proyecto }}';",
+        "options": {}
+      },
+      "id": "3eb24be2-741e-41f1-b9be-2ae6ddb58164",
+      "name": "Borrar Partidas Previas1",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3536,
+        1648
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM ctcon_propuestas WHERE proyecto_bc3 = '{{ $(\"Parsear FIEBDC a JSON1\").all()[$itemIndex].json.propuesta_maestra.Proyecto }}';",
+        "options": {}
+      },
+      "id": "3edaa55a-473c-4301-aafa-d82508be290a",
+      "name": "Borrar Propuesta Previa1",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3760,
+        1648
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctcon_propuestas (proyecto_bc3, cliente, estado, fecha_recepcion) VALUES ('{{ $(\"Parsear FIEBDC a JSON1\").all()[$itemIndex].json.propuesta_maestra.Proyecto }}', '{{ $(\"Parsear FIEBDC a JSON1\").all()[$itemIndex].json.propuesta_maestra.cliente }}', '{{ $(\"Parsear FIEBDC a JSON1\").all()[$itemIndex].json.propuesta_maestra.estado }}', '{{ $(\"Parsear FIEBDC a JSON1\").all()[$itemIndex].json.propuesta_maestra.fecha_recepcion }}');",
+        "options": {}
+      },
+      "id": "54355060-2648-4b05-af2c-22b369c77193",
+      "name": "Guardar Propuesta1",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3984,
+        1552
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allResults = [];\nconst fuentes = $('Parsear FIEBDC a JSON1').all();\nfor (const fuente of fuentes) {\n  const partidas = Array.isArray(fuente.json?.partidas_hijas) ? fuente.json.partidas_hijas : [];\n  for (const p of partidas) {\n    if (!p || typeof p !== 'object' || !p.propuesta_id) continue;\n    allResults.push({ json: { propuesta_id: String(p.propuesta_id), texto_partida: String(p.texto_partida || ''), unidad: String(p.unidad || ''), cantidad: Number(p.cantidad) || 0, precio_base_estimado: Number(p.precio_base_estimado) || 0 } });\n  }\n}\nreturn allResults;"
+      },
+      "id": "ac7cb40c-2a74-4d12-a7ac-1fa3e917b0c0",
+      "name": "Preparar Partidas1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3984,
+        1744
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctcon_partidas (id_bc3, propuesta_id, propuesta_bc3, texto_partida, unidad, cantidad, precio_base_estimado) VALUES ('{{ $json.propuesta_id }}-{{ $json.texto_partida.split(\"::\")[0] }}', (SELECT id FROM ctcon_propuestas WHERE proyecto_bc3 = '{{ $json.propuesta_id }}' LIMIT 1), '{{ $json.propuesta_id }}', '{{ $json.texto_partida }}', '{{ $json.unidad }}', {{ $json.cantidad }}, {{ $json.precio_base_estimado }});",
+        "options": {}
+      },
+      "id": "badf4a81-3928-45e2-aeb3-61a4ee89b7ff",
+      "name": "Guardar Partidas1",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        4208,
+        1744
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fase4-licitacion",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "fc88865e-b126-4c3d-9837-485e07338f2b",
+      "name": "Webhook Local (Fase 4)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        1968
+      ],
+      "webhookId": "634f3490-6456-4311-8f16-d2ba58a823a5"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctcon_solicitudes (id_bc3, propuesta_id, propuesta_bc3, proveedor_id, proveedor_nombre, proveedor_email, token, oficio_solicitado, tareas, estado_solicitud, fecha_envio, anexo_url) VALUES ('{{ $json.body.token }}', (SELECT id FROM ctcon_propuestas WHERE proyecto_bc3 = '{{ $json.body.propuesta_id }}' LIMIT 1), '{{ $json.body.propuesta_id }}', (SELECT id FROM ctcon_proveedores WHERE id_bc3 = '{{ $json.body.proveedor_id }}' LIMIT 1), '{{ $json.body.proveedor_nombre }}', '{{ $json.body.proveedor_email }}', '{{ $json.body.token }}', '{{ $json.body.oficio_solicitado }}', '{{ JSON.stringify($json.body.tareas) }}', 'Pendiente', NOW(), '{{ $json.body.anexo_url }}');",
+        "options": {}
+      },
+      "id": "afccedb1-7b4d-4ccb-a3c1-a0d6615e49fc",
+      "name": "MySQL - Guardar Solicitud",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        2864,
+        1968
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const wh = $('Webhook Local (Fase 4)').first().json.body;\nconst payload = {\n  sender: { name: 'ADIR Reformas', email: 'adirbc3@gmail.com' },\n  to: [{ email: wh.proveedor_email || '', name: wh.proveedor_nombre || '' }],\n  subject: 'Solicitud de presupuesto - ' + (wh.oficio_solicitado || '') + ' | Proyecto ADIR',\n  htmlContent: wh.html_email || ''\n};\n\nif (wh.anexo_base64 && wh.anexo_nombre) {\n  let rawBase64 = wh.anexo_base64;\n  if (rawBase64.includes(',')) {\n    rawBase64 = rawBase64.split(',')[1];\n  }\n  rawBase64 = rawBase64.replace(/\\s/g, '');\n  \n  let safeName = wh.anexo_nombre\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-zA-Z0-9._-]/g, '_');\n    \n  payload.attachment = [\n    {\n      content: rawBase64,\n      name: safeName\n    }\n  ];\n}\n\nreturn [{ json: { _payload: JSON.stringify(payload) } }];"
+      },
+      "id": "adb416db-dc77-4824-8abe-598676a5ab58",
+      "name": "Preparar Payload Proveedor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        1968
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{$env.BREVO_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._payload }}",
+        "options": {}
+      },
+      "id": "1c8018c0-5737-4838-926a-ce50797e83e8",
+      "name": "Enviar Email (Brevo)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3312,
+        1968
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": true, \"message\": \"Solicitud enviada correctamente\"}",
+        "options": {}
+      },
+      "id": "546dc803-003a-4e63-ad0b-5a6e39371239",
+      "name": "Responder OK Fase4",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3536,
+        1968
+      ]
+    },
+    {
+      "parameters": {
+        "path": "portal-proveedor",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "891f965f-d890-4c7b-877a-6e32ddf9643b",
+      "name": "Webhook (Servir HTML)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        2192
+      ],
+      "webhookId": "7c44aa35-b282-41d3-882d-58b3fc4e4a4a"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.id_bc3 AS id, s.propuesta_bc3 AS propuesta_id, s.oficio_solicitado, s.estado_solicitud, s.token, s.proveedor_nombre, s.proveedor_email, s.tareas, (SELECT p.id_bc3 FROM ctcon_proveedores p WHERE p.id = s.proveedor_id) AS proveedor_id, s.comentarios_generales FROM ctcon_solicitudes s WHERE s.token = '{{ $json.query.token }}' LIMIT 1;",
+        "options": {}
+      },
+      "id": "eeceab01-b73b-44c3-83fb-3c178ff06476",
+      "name": "MySQL - Leer Solicitud",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        2864,
+        2192
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id_bc3 AS id, propuesta_bc3 AS propuesta_id, texto_partida, unidad, cantidad, precio_base_estimado, precio_adjudicado, precio_ia, oficio_asignado, oficio_asignado AS oficio_necesario FROM ctcon_partidas WHERE propuesta_bc3 = '{{ $json.propuesta_id }}';",
+        "options": {}
+      },
+      "id": "b99c15f7-6f71-4aed-acc3-d37d7eb34708",
+      "name": "MySQL - Leer Partidas",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3088,
+        2192
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const solicitud = $(\"MySQL - Leer Solicitud\").first()?.json;\nif (!solicitud) { return [{ json: { html: '<html><body>Enlace no valido</body></html>' } }]; }\nif (solicitud.estado_solicitud === 'Respondido') { return [{ json: { html: '<html><body>Solicitud Cerrada</body></html>' } }]; }\nconst partidas = $input.all().map(i => i.json);\nconst normalize = (str) => str ? str.trim().toLowerCase().normalize(\"NFD\").replace(/[\\u0300-\\u036f]/g, \"\") : \"\";\nconst buscado = normalize(solicitud.oficio_solicitado);\nconst filtradas = partidas.filter(p => normalize(p.oficio_necesario) === buscado || normalize(p.oficio_asignado) === buscado);\nlet contentHtml = \"\";\nif (filtradas.length === 0) {\n  contentHtml = '<div>No hay partidas para: ' + solicitud.oficio_solicitado + '</div>';\n} else {\n  const filasHtml = filtradas.map(p => '<tr><td>' + (p.texto_partida || 'Sin descripcion') + '</td><td><input type=\"text\" name=\"precio_' + p.id + '\" required></td><td><input type=\"text\" name=\"comentario_' + p.id + '\"></td></tr>').join('');\n  contentHtml = '<form action=\"https://n8n-production-f7f7.up.railway.app/webhook/fase5-procesar\" method=\"POST\"><input type=\"hidden\" name=\"solicitud_id\" value=\"' + solicitud.id + '\"><input type=\"hidden\" name=\"proveedor_id\" value=\"' + (solicitud.proveedor_id || '') + '\"><table>' + filasHtml + '</table><button type=\"submit\">Enviar</button></form>';\n}\nconst html = '<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Portal Proveedor</title></head><body><h1>Portal ADIR</h1>' + contentHtml + '</body></html>';\nreturn [{ json: { html } }];"
+      },
+      "id": "81fbc8de-1642-45c6-b0bb-aec45ca83e98",
+      "name": "Generar HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3312,
+        2192
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "11419cad-fde9-4450-9da0-d1895c9768ab",
+      "name": "Devolver Pagina Web",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3536,
+        2192
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fase5-procesar",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4886e0c7-e059-4452-bfc3-5942c606736a",
+      "name": "Webhook (Recibir Formulario)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        2512
+      ],
+      "webhookId": "dbb62525-1838-4d39-8945-e560231d6a29"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.item.json.body;\nconst items = [];\nfor (const key of Object.keys(body)) {\n  if (key.startsWith('precio_')) {\n    const id = key.replace('precio_', '');\n    const v = parseFloat((body[key] || \"0\").toString().replace(',', '.'));\n    items.push({ json: { solicitud_id: body.solicitud_id, proveedor_id: body.proveedor_id || null, partida_id: id, precio_ofertado: isNaN(v) ? 0 : v, comentarios: body['comentario_' + id] || \"\" } });\n  }\n}\nreturn items;"
+      },
+      "id": "f962ea46-d8e7-4acc-b75c-2d1a0a4f0615",
+      "name": "Preparar Insert en Supabase",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2864,
+        2416
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctcon_respuestas (solicitud_id, solicitud_bc3, proveedor_id, proveedor_bc3, partida_id, partida_bc3, precio_ofertado, comentarios, created_at) VALUES ((SELECT id FROM ctcon_solicitudes WHERE id_bc3 = '{{ $json.solicitud_id }}' LIMIT 1), '{{ $json.solicitud_id }}', (SELECT id FROM ctcon_proveedores WHERE id_bc3 = '{{ $json.proveedor_id }}' LIMIT 1), '{{ $json.proveedor_id }}', (SELECT id FROM ctcon_partidas WHERE id_bc3 = '{{ $json.partida_id }}' LIMIT 1), '{{ $json.partida_id }}', {{ $json.precio_ofertado }}, '{{ $json.comentarios }}', NOW());",
+        "options": {}
+      },
+      "id": "62fbadf3-7ac5-4ad1-adb3-e90db7b62a61",
+      "name": "MySQL - Guardar Precios",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3088,
+        2416
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $(\"Webhook (Recibir Formulario)\").item.json.body.solicitud_id } }];"
+      },
+      "id": "af8e946c-6877-4c5c-b2d6-db35274c1c61",
+      "name": "Recuperar ID de Solicitud",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2864,
+        2608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ctcon_solicitudes SET estado_solicitud = 'Respondido' WHERE id_bc3 = '{{ $json.id }}';",
+        "options": {}
+      },
+      "id": "bfdeef1e-8550-4b79-b63b-10cc1f73a53c",
+      "name": "MySQL - Marcar Respondida",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3088,
+        2608
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "<!DOCTYPE html><html><body style=\"text-align:center;padding:50px;\"><h1 style=\"color:green;\">Muchas Gracias!</h1><p>Sus precios han sido registrados. ADIR le contactara proximamente.</p></body></html>",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              }
+            ]
+          }
+        }
+      },
+      "id": "a763d62d-471f-4828-80e7-c63b87f2bb9d",
+      "name": "Responder Mensaje de Exito",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3312,
+        2608
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "presupuesto-cliente",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "70383f05-816e-4977-9cbb-bedf92d0dd78",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        2832
+      ],
+      "webhookId": "e23426aa-a167-4ebf-8ad3-d57cf34fed27"
+    },
+    {
+      "parameters": {
+        "jsCode": "const wh = $input.item.json.body;\nconst payload = {\n  sender: { name: 'ADIR Reformas', email: 'adirbc3@gmail.com' },\n  to: [{ email: wh.cliente_email || '', name: wh.cliente_nombre || 'Cliente' }],\n  subject: 'Presupuesto de Obra - ADIR Reformas | Proyecto ' + (wh.proyecto_nombre || wh.proyecto || ''),\n  htmlContent: wh.html_presupuesto || ''\n};\nreturn [{ json: { _payload: JSON.stringify(payload) } }];"
+      },
+      "id": "4fc565d7-a55d-4a9c-8c08-201aaf82db95",
+      "name": "Preparar Payload Cliente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2864,
+        2832
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{$env.BREVO_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._payload }}",
+        "options": {}
+      },
+      "id": "a758bacf-53e1-451a-a8ec-e273b57242df",
+      "name": "Enviar Email al Cliente",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3088,
+        2832
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": true, \"message\": \"Email enviado al cliente\"}",
+        "options": {}
+      },
+      "id": "53239d53-f7a8-40d3-a112-d67bd423755f",
+      "name": "Responder OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3312,
+        2832
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "presupuesto-firmado",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "70f2ed28-5ba0-4281-9703-4b994543d18e",
+      "name": "Webhook1",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        3056
+      ],
+      "webhookId": "082a334e-46bb-4b06-b195-3c684efa3460"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": true}",
+        "options": {}
+      },
+      "id": "13997f6e-c54b-470f-89d1-d5aa6113de22",
+      "name": "Responder OK1",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2864,
+        3056
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "presupuesto-rechazado",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e00ad65b-5b72-4693-9605-b17a4a814208",
+      "name": "Webhook2",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        3280
+      ],
+      "webhookId": "b14b27e9-445a-4e4d-8d28-663081ae95df"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": true}",
+        "options": {}
+      },
+      "id": "5ba33062-0f4f-403b-a675-a0fc9e4cb2e6",
+      "name": "Responder OK2",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2864,
+        3280
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fase5-respuesta",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0f926500-59d2-4244-9906-5638c1ad3536",
+      "name": "Webhook Fase5 Respuesta",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        3504
+      ],
+      "webhookId": "a74f4d05-7b55-417f-b228-77559db5aa87"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.item.json.body;\nconst precios = body.precios || [];\nconst solicitud_id = body.solicitud_id;\nconst proveedor_id = body.proveedor_id || null;\nif (!precios.length) return [];\nreturn precios.map(p => ({ json: { solicitud_id, proveedor_id, partida_id: p.partida_id, precio_ofertado: parseFloat(p.precio_ofertado) || 0, comentarios: p.comentarios || \"\" } }));"
+      },
+      "id": "4cadd6ff-9df5-436e-86f2-b08940c58a49",
+      "name": "Preparar Precios React",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2864,
+        3504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO ctcon_respuestas (solicitud_id, solicitud_bc3, proveedor_id, proveedor_bc3, partida_id, partida_bc3, precio_ofertado, comentarios, created_at) VALUES ((SELECT id FROM ctcon_solicitudes WHERE id_bc3 = '{{ $json.solicitud_id }}' LIMIT 1), '{{ $json.solicitud_id }}', (SELECT id FROM ctcon_proveedores WHERE id_bc3 = '{{ $json.proveedor_id }}' LIMIT 1), '{{ $json.proveedor_id }}', (SELECT id FROM ctcon_partidas WHERE id_bc3 = '{{ $json.partida_id }}' LIMIT 1), '{{ $json.partida_id }}', {{ $json.precio_ofertado }}, '{{ $json.comentarios }}', NOW());",
+        "options": {}
+      },
+      "id": "a6166166-5b27-441d-90ac-84f8f9f64bc4",
+      "name": "MySQL - Guardar Respuestas React",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3088,
+        3504
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { id: $(\"Webhook Fase5 Respuesta\").item.json.body.solicitud_id, comentarios_generales: $(\"Webhook Fase5 Respuesta\").item.json.body.comentarios_generales || \"\" } }];"
+      },
+      "id": "887fa1d5-caab-415c-b150-2f602dfa88f4",
+      "name": "Recuperar ID Solicitud React",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3312,
+        3504
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE ctcon_solicitudes SET estado_solicitud = 'Respondido', comentarios_generales = '{{ $json.comentarios_generales }}' WHERE id_bc3 = '{{ $json.id }}';",
+        "options": {}
+      },
+      "id": "b4128118-5862-4bb4-9b84-4f6c575daeb5",
+      "name": "MySQL - Marcar Respondida React",
+      "type": "n8n-nodes-base.mySql",
+      "typeVersion": 2.1,
+      "position": [
+        3536,
+        3504
+      ],
+      "credentials": {
+        "mySql": {
+          "id": "zRzvgK93BF4jIu4E",
+          "name": "MySQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"success\": true}",
+        "options": {}
+      },
+      "id": "8fca6653-4a2d-458e-a016-fa204fea603c",
+      "name": "Responder OK Fase5",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3760,
+        3504
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Parsear FIEBDC a JSON1').first().json;\nconst emailRemitente = data.propuesta_maestra?.cliente || '';\nconst idUnico = data.propuesta_maestra?.Proyecto || 'Sin referencia';\n\nconst ahora = new Date().toLocaleString('es-ES', {\n  day: '2-digit', month: '2-digit', year: 'numeric',\n  hour: '2-digit', minute: '2-digit'\n});\n\nconst htmlContent = `\n<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>BC3 Recibido</title>\n</head>\n<body style=\"margin:0;padding:0;background:#f4f7fb;font-family:'Segoe UI',Arial,sans-serif;\">\n  <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f4f7fb;padding:40px 0;\">\n    <tr>\n      <td align=\"center\">\n        <table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,45,84,0.10);\">\n\n          <tr>\n            <td style=\"background:#002D54;padding:32px 40px;text-align:center;\">\n              <div style=\"font-size:28px;font-weight:800;color:#ffffff;letter-spacing:2px;\">ADIR</div>\n              <div style=\"font-size:12px;color:#7db8d8;letter-spacing:3px;margin-top:4px;\">REFORMAS Y CONSTRUCCIÓN</div>\n            </td>\n          </tr>\n\n          <tr>\n            <td style=\"background:#0ea5e9;height:4px;\"></td>\n          </tr>\n\n          <tr>\n            <td style=\"padding:40px 40px 32px;\">\n              <p style=\"margin:0 0 8px;font-size:15px;color:#50504d;\">Estimado/a,</p>\n              <h1 style=\"margin:0 0 24px;font-size:22px;font-weight:700;color:#002D54;\">\n                ✅ Fichero BC3 recibido correctamente\n              </h1>\n\n              <p style=\"margin:0 0 24px;font-size:15px;color:#374151;line-height:1.7;\">\n                Hemos recibido y procesado su fichero BC3 en nuestro sistema.<br>\n                A continuación encontrará un resumen de la recepción:\n              </p>\n\n              <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f6ff;border:1.5px solid #c7d5e6;border-radius:12px;margin-bottom:28px;\">\n                <tr>\n                  <td style=\"padding:24px 28px;\">\n                    <table width=\"100%\" cellpadding=\"0\" cellspacing=\"6\">\n                      <tr>\n                        <td style=\"font-size:13px;color:#6b7280;font-weight:600;width:140px;padding-bottom:10px;\">Referencia</td>\n                        <td style=\"font-size:14px;color:#002D54;font-weight:700;padding-bottom:10px;\">${idUnico}</td>\n                      </tr>\n                      <tr>\n                        <td style=\"font-size:13px;color:#6b7280;font-weight:600;\">Recibido el</td>\n                        <td style=\"font-size:14px;color:#1D1D1B;\">${ahora}</td>\n                      </tr>\n                    </table>\n                  </td>\n                </tr>\n              </table>\n\n              <p style=\"margin:0 0 24px;font-size:15px;color:#374151;line-height:1.7;\">\n                Nuestro equipo revisará la información y se pondrá en contacto con usted en los próximos días.\n                Si tiene alguna pregunta, no dude en responder a este correo.\n              </p>\n\n              <p style=\"margin:0;font-size:15px;color:#374151;\">Muchas gracias por confiar en <strong style=\"color:#002D54;\">ADIR Reformas</strong>.</p>\n            </td>\n          </tr>\n\n          <tr>\n            <td style=\"background:#002D54;padding:24px 40px;text-align:center;\">\n              <p style=\"margin:0;font-size:12px;color:#7db8d8;line-height:1.8;\">\n                ADIR Reformas y Construcción<br>\n                Este es un correo automático generado tras la recepción de su fichero BC3.\n              </p>\n            </td>\n          </tr>\n\n        </table>\n      </td>\n    </tr>\n  </table>\n</body>\n</html>\n`;\n\nconst payload = {\n  sender: { name: 'ADIR Reformas', email: 'adirbc3@gmail.com' },\n  to: [{ email: emailRemitente }],\n  subject: `✅ BC3 recibido correctamente – ${idUnico}`,\n  htmlContent\n};\n\nreturn [{ json: { _payload: JSON.stringify(payload) } }];"
+      },
+      "id": "5cf5f573-e5f7-48d3-b947-a88215089e69",
+      "name": "Preparar Email Confirmación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4416,
+        1744
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{$env.BREVO_API_KEY}}"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._payload }}",
+        "options": {}
+      },
+      "id": "02c8c409-696f-4637-8800-3e83a97f4981",
+      "name": "Enviar Confirmación (Brevo)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4656,
+        1744
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst proyectoId  = body.proyectoId  || 'Sin referencia';\nconst proyectoNombre = body.proyectoNombre || proyectoId;\nconst jefeCorreo  = body.jefeCorreo  || '';\nconst jefeNombre  = body.jefeNombre  || jefeCorreo;\nconst tipo        = body.tipo        || 'revision'; // 'revision' | 'reasignacion'\n\nif (!jefeCorreo) return [];\n\nconst ahora = new Date().toLocaleString('es-ES', {\n  day: '2-digit', month: '2-digit', year: 'numeric',\n  hour: '2-digit', minute: '2-digit'\n});\n\nconst esReasignacion = tipo === 'reasignacion';\nconst accion  = esReasignacion ? 'reasignado' : 'asignado para revisión';\nconst tituloH1 = esReasignacion\n  ? '🔄 Proyecto reasignado'\n  : '📋 Nuevo proyecto pendiente de revisión';\nconst msgCuerpo = esReasignacion\n  ? `Se te ha reasignado el siguiente proyecto. Por favor, revísalo en cuanto puedas.`\n  : `Se te ha asignado el siguiente proyecto para que lo revises y valides. Por favor, accede a la aplicación cuando puedas.`;\n\nconst htmlContent = `\n<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Notificación ADIR</title>\n</head>\n<body style=\"margin:0;padding:0;background:#f4f7fb;font-family:'Segoe UI',Arial,sans-serif;\">\n  <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f4f7fb;padding:40px 0;\">\n    <tr><td align=\"center\">\n      <table width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,45,84,0.10);\">\n\n        <tr>\n          <td style=\"background:#002D54;padding:28px 40px;text-align:center;\">\n            <div style=\"font-size:26px;font-weight:800;color:#ffffff;letter-spacing:2px;\">ADIR</div>\n            <div style=\"font-size:11px;color:#7db8d8;letter-spacing:3px;margin-top:4px;\">REFORMAS Y CONSTRUCCIÓN</div>\n          </td>\n        </tr>\n\n        <tr><td style=\"background:#0ea5e9;height:4px;\"></td></tr>\n\n        <tr>\n          <td style=\"padding:36px 40px 28px;\">\n            <p style=\"margin:0 0 6px;font-size:15px;color:#50504d;\">Hola, <strong>${jefeNombre}</strong></p>\n            <h1 style=\"margin:0 0 20px;font-size:20px;font-weight:700;color:#002D54;\">${tituloH1}</h1>\n\n            <p style=\"margin:0 0 24px;font-size:15px;color:#374151;line-height:1.7;\">${msgCuerpo}</p>\n\n            <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f6ff;border:1.5px solid #c7d5e6;border-radius:12px;margin-bottom:28px;\">\n              <tr><td style=\"padding:20px 24px;\">\n                <table width=\"100%\" cellpadding=\"0\" cellspacing=\"4\">\n                  <tr>\n                    <td style=\"font-size:12px;color:#6b7280;font-weight:600;width:130px;padding-bottom:8px;\">Proyecto</td>\n                    <td style=\"font-size:14px;color:#002D54;font-weight:700;padding-bottom:8px;\">${proyectoNombre}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"font-size:12px;color:#6b7280;font-weight:600;padding-bottom:8px;\">Referencia</td>\n                    <td style=\"font-size:13px;color:#374151;padding-bottom:8px;\">${proyectoId}</td>\n                  </tr>\n                  <tr>\n                    <td style=\"font-size:12px;color:#6b7280;font-weight:600;\">Estado</td>\n                    <td style=\"font-size:13px;\"><span style=\"background:#fef9c3;color:#854d0e;padding:2px 8px;border-radius:4px;font-weight:600;\">Pendiente de revisión</span></td>\n                  </tr>\n                  <tr>\n                    <td style=\"font-size:12px;color:#6b7280;font-weight:600;padding-top:8px;\">Notificado el</td>\n                    <td style=\"font-size:13px;color:#374151;padding-top:8px;\">${ahora}</td>\n                  </tr>\n                </table>\n              </td></tr>\n            </table>\n\n            <p style=\"margin:0;font-size:14px;color:#374151;\">Accede a <strong style=\"color:#002D54;\">ADIR Reformas</strong> → Jefes de Obra para ver el detalle completo.</p>\n          </td>\n        </tr>\n\n        <tr>\n          <td style=\"background:#002D54;padding:20px 40px;text-align:center;\">\n            <p style=\"margin:0;font-size:11px;color:#7db8d8;line-height:1.8;\">\n              ADIR Reformas y Construcción · Notificación automática\n            </p>\n          </td>\n        </tr>\n\n      </table>\n    </td></tr>\n  </table>\n</body>\n</html>`;\n\nconst payload = {\n  sender: { name: 'ADIR Reformas', email: 'adirbc3@gmail.com' },\n  to: [{ email: jefeCorreo }],\n  subject: `${esReasignacion ? '🔄 Proyecto reasignado' : '📋 Nuevo proyecto para revisar'} – ${proyectoNombre}`,\n  htmlContent\n};\n\nreturn [{ json: { _payload: JSON.stringify(payload) } }];"
+      },
+      "id": "bc14aa49-ae93-4ed9-bf6d-db969837228d",
+      "name": "Preparar Email Jefe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4240,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.brevo.com/v3/smtp/email",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "api-key",
+              "value": "={{$env.BREVO_API_KEY}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json._payload }}",
+        "options": {}
+      },
+      "id": "66af8d22-04de-422a-9744-7912af53fea9",
+      "name": "Enviar Notificación (Brevo)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4480,
+        1984
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "notificar-jefe-obra",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "ff524665-b57c-442b-a399-de30c978d340",
+      "name": "Webhook3",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        1984
+      ],
+      "webhookId": "notificar-jefe-obra"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": {}
+      },
+      "id": "9df7370b-cdca-4b16-8a43-46b73143164d",
+      "name": "Responder OK3",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4720,
+        1984
+      ]
+    }
+  ],
+  "connections": {
+    "EmailRead Imap1": {
+      "main": [
+        [
+          {
+            "node": "Filtrar BC3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrar BC3": {
+      "main": [
+        [
+          {
+            "node": "Extraer Fichero BC3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Fichero BC3": {
+      "main": [
+        [
+          {
+            "node": "Parsear FIEBDC a JSON1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear FIEBDC a JSON1": {
+      "main": [
+        [
+          {
+            "node": "Borrar Partidas Previas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Borrar Partidas Previas1": {
+      "main": [
+        [
+          {
+            "node": "Borrar Propuesta Previa1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Borrar Propuesta Previa1": {
+      "main": [
+        [
+          {
+            "node": "Guardar Propuesta1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Preparar Partidas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Partidas1": {
+      "main": [
+        [
+          {
+            "node": "Guardar Partidas1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Partidas1": {
+      "main": [
+        [
+          {
+            "node": "Preparar Email Confirmación",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Local (Fase 4)": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Guardar Solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Guardar Solicitud": {
+      "main": [
+        [
+          {
+            "node": "Preparar Payload Proveedor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Payload Proveedor": {
+      "main": [
+        [
+          {
+            "node": "Enviar Email (Brevo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Email (Brevo)": {
+      "main": [
+        [
+          {
+            "node": "Responder OK Fase4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (Servir HTML)": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Leer Solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Leer Solicitud": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Leer Partidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Leer Partidas": {
+      "main": [
+        [
+          {
+            "node": "Generar HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar HTML": {
+      "main": [
+        [
+          {
+            "node": "Devolver Pagina Web",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook (Recibir Formulario)": {
+      "main": [
+        [
+          {
+            "node": "Preparar Insert en Supabase",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Recuperar ID de Solicitud",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Insert en Supabase": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Guardar Precios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar ID de Solicitud": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Marcar Respondida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Marcar Respondida": {
+      "main": [
+        [
+          {
+            "node": "Responder Mensaje de Exito",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Preparar Payload Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Payload Cliente": {
+      "main": [
+        [
+          {
+            "node": "Enviar Email al Cliente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Email al Cliente": {
+      "main": [
+        [
+          {
+            "node": "Responder OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Responder OK1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook2": {
+      "main": [
+        [
+          {
+            "node": "Responder OK2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Fase5 Respuesta": {
+      "main": [
+        [
+          {
+            "node": "Preparar Precios React",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Precios React": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Guardar Respuestas React",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Guardar Respuestas React": {
+      "main": [
+        [
+          {
+            "node": "Recuperar ID Solicitud React",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar ID Solicitud React": {
+      "main": [
+        [
+          {
+            "node": "MySQL - Marcar Respondida React",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MySQL - Marcar Respondida React": {
+      "main": [
+        [
+          {
+            "node": "Responder OK Fase5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Email Confirmación": {
+      "main": [
+        [
+          {
+            "node": "Enviar Confirmación (Brevo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Email Jefe": {
+      "main": [
+        [
+          {
+            "node": "Enviar Notificación (Brevo)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Notificación (Brevo)": {
+      "main": [
+        [
+          {
+            "node": "Responder OK3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook3": {
+      "main": [
+        [
+          {
+            "node": "Preparar Email Jefe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2fd48378a910f370a841145b97d3031098c0f4db563d30487571c8601a847c83"
+  }
+}
