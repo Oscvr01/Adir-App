@@ -117,8 +117,8 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
     
     const itemsParaIA = partidas
         .filter(p => !((p.Capítulo || p.Capitulo || "").endsWith('#')))
-        .map(p => ({
-            id: p.id || Math.random().toString(36),
+        .map((p, idx) => ({
+            id: p.id || p.Capítulo || p.Capitulo || p.texto_partida || `partida_${idx}`,
             cap: p.Capítulo || p.Capitulo || "S/C",
             desc: (p.Descripción || p.Descripcion || p.texto_partida || "").toString().trim(),
             unidad: p["Unidad IA"] || p.unidad || ""
@@ -255,29 +255,44 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
             batch.forEach((item, batchIdx) => {
                 let info = lote[item.id];
                 
-                // Fallback in case Mistral altered the key slightly
+                // Fallback 1: coincidencia parcial de clave
                 if (!info) {
-                    const matchedKey = Object.keys(lote).find(k => k.includes(item.id) || item.id.includes(k));
+                    const matchedKey = Object.keys(lote).find(k => 
+                        k.includes(item.id) || item.id.includes(k) ||
+                        (item.cap && (k.includes(item.cap) || item.cap.includes(k)))
+                    );
                     if (matchedKey) info = lote[matchedKey];
+                }
+
+                // Fallback 2: correspondencia posicional si la cantidad coincide con el lote
+                if (!info && Object.keys(lote).length === batch.length) {
+                    const fallbackKey = Object.keys(lote)[batchIdx];
+                    info = lote[fallbackKey];
                 }
 
                 if (info && info.oficio && info.oficio !== "Sin asignar") {
                     const ctx = bloquesContexto[batchIdx];
                     // Si ya había unidad previa (BC3/manual/histórico), respetarla siempre.
-                    // Si no había, usar la que propone Mistral (puede ser null si no sabe).
+                    // Si no había, usar la que propone la IA (puede ser null si no sabe).
                     const unidadFinal = ctx.tieneUnidadPrevia
                         ? ctx.unidad
                         : (info.unidad && info.unidad !== 'null' ? info.unidad : null);
                     const unidad_por_ia = !ctx.tieneUnidadPrevia && !!unidadFinal;
 
-                    asignacionesFinales[item.id] = {
+                    const dataAsignada = {
                         oficio: info.oficio,
-                        precio: info.precio || 0,
+                        precio: Number(info.precio) || 0,
                         unidad: unidadFinal,
                         unidad_por_ia,
                         justificacion: info.justificacion || "S/Ref",
                         needsQuote: (info.precio === 0)
                     };
+
+                    asignacionesFinales[item.id] = dataAsignada;
+                    if (item.cap) asignacionesFinales[item.cap] = dataAsignada;
+                    if (item.cap && typeof item.cap === 'string') {
+                        asignacionesFinales[item.cap.replace(/#$/, '')] = dataAsignada;
+                    }
                 }
             });
         } else {

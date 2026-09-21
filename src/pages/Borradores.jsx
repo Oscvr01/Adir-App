@@ -532,13 +532,23 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                 if (prog.progress) setAiProgress(prog.progress);
             });
             let aplicadas = 0;
-            const nuevasPartidas = partidas.map(p => {
-                if (p.Capítulo && p.Capítulo.endsWith('#')) return p;
-                const info = resultado.asignaciones[p.id];
+            const asignaciones = resultado?.asignaciones || {};
+            console.log('[Borradores IA] Asignaciones recibidas:', Object.keys(asignaciones).length, asignaciones);
+            
+            const nuevasPartidas = partidas.map((p, idx) => {
+                const cap = p.Capítulo || p.Capitulo || '';
+                if (cap && typeof cap === 'string' && cap.endsWith('#')) return p;
+                
+                const capLimpio = typeof cap === 'string' ? cap.replace(/#$/, '') : '';
+                const info = (p.id && asignaciones[p.id])
+                          || (cap && asignaciones[cap])
+                          || (capLimpio && asignaciones[capLimpio])
+                          || (p.texto_partida && asignaciones[p.texto_partida])
+                          || asignaciones[`partida_${idx}`]
+                          || asignaciones[idx];
+
                 if (info && info.oficio && info.oficio !== "Sin asignar") {
                     aplicadas++;
-                    // Unidad: solo se asigna si el campo está vacío.
-                    // info.unidad_por_ia indica que Mistral la ha propuesto (campo vacío previo).
                     const unidadActual = p["Unidad IA"] || "";
                     const unidadFinal = unidadActual || info.unidad || "";
                     const unidadPorIA = !unidadActual && !!info.unidad && !!info.unidad_por_ia;
@@ -551,11 +561,11 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                         unidad_asignada_por_ia: unidadPorIA,
                         isModified: true,
                         origen_modificacion: 'IA'
-                        // "Precio Total (€)" NO se toca — es el precio real que edita el usuario
                     };
                 }
                 return p;
             });
+            console.log(`[Borradores IA] Partidas evaluadas: ${partidas.length}, aplicadas: ${aplicadas}`);
             if (aplicadas > 0) {
                 setPartidas(nuevasPartidas);
                 setHasUnsavedChanges(true);
