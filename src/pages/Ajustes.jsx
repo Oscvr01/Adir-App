@@ -146,7 +146,7 @@ const Ajustes = () => {
                     <div className="glass-card" style={{ border: groqConfigured ? '1px solid var(--success)' : '1px solid var(--primary)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
                             <Key size={22} color="var(--primary)" />
-                            <h2 style={{ margin: 0 }}>Inteligencia Artificial — Groq (LLaMA 3)</h2>
+                            <h2 style={{ margin: 0 }}>Inteligencia Artificial — Groq</h2>
                             {groqConfigured && (
                                 <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '0.85rem', fontWeight: 600 }}>
                                     <CheckCircle size={14} /> Configurada

@@ -335,7 +335,7 @@ export async function extraerPartidasDePDFConIA(file, apiKey, onProgress) {
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'groq/compound-mini',
+          model: 'openai/gpt-oss-120b',
           messages: [
             { role: 'system', content: PROMPT_SISTEMA },
             { role: 'user',   content: `TEXTO DEL PDF (fragmento ${ci + 1}/${totalChunks}):\n${chunk}` },

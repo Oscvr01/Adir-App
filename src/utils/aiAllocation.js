@@ -213,13 +213,14 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
         let response;
         let maxRetries = 5;
         let attempt = 0;
+        let currentModel = 'openai/gpt-oss-120b';
 
         while (attempt <= maxRetries) {
             response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
                 body: JSON.stringify({
-                    model: 'groq/compound-mini',
+                    model: currentModel,
                     messages: [
                         { role: 'system', content: 'You are a JSON generator. You MUST respond ONLY with a raw, valid JSON object without markdown formatting or introductory text.' },
                         { role: 'user', content: prompt }
@@ -236,6 +237,11 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                 const backoffMs = Math.min(30000, 3000 * Math.pow(2, attempt - 1));
                 console.warn(`[Groq AI] Rate limit (429) alcanzado. Reintentando en ${backoffMs / 1000}s (Intento ${attempt}/${maxRetries})...`);
                 await delay(backoffMs);
+            } else if (!response.ok && currentModel !== 'openai/gpt-oss-20b') {
+                console.warn(`[Groq AI] Error con ${currentModel} (${response.status}). Cambiando a modelo de respaldo openai/gpt-oss-20b...`);
+                currentModel = 'openai/gpt-oss-20b';
+                attempt++;
+                await delay(1000);
             } else {
                 break;
             }
