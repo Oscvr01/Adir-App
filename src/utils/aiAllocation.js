@@ -249,8 +249,24 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
 
         if (response.ok) {
             const data = await response.json();
-            const content = JSON.parse(data.choices?.[0]?.message?.content || '{}');
-            const lote = content.asignaciones || {};
+            let contentStr = data.choices?.[0]?.message?.content || '{}';
+            // Limpiar posibles bloques markdown si la IA ignora la instrucción de no usarlos
+            contentStr = contentStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+            
+            let content = {};
+            try { content = JSON.parse(contentStr); } catch(e) { console.warn("[Groq AI] JSON parse error:", e); }
+            
+            // Buscar el objeto de asignaciones, asumiendo que la IA podría cambiar la clave "asignaciones" por otra
+            let lote = content.asignaciones || content.tareas || content.partidas;
+            if (!lote) {
+                // Si solo hay una clave raíz y es un objeto, usarla
+                const keys = Object.keys(content);
+                if (keys.length === 1 && typeof content[keys[0]] === 'object' && content[keys[0]] !== null) {
+                    lote = content[keys[0]];
+                } else {
+                    lote = content; // Fallback: usar el objeto entero
+                }
+            }
 
             batch.forEach((item, batchIdx) => {
                 let info = lote[item.id];
