@@ -71,9 +71,9 @@ const getCypeContext = async (descripcion) => {
 };
 
 /**
- * Búsqueda en la Base de Precios OFICIAL de ADIR (Máxima Prioridad)
+ * Búsqueda en la Base de Precios OFICIAL Propia (Máxima Prioridad)
  */
-const getAdirContext = async (descripcion) => {
+const getBasePropiaContext = async (descripcion) => {
     try {
         if (!descripcion || descripcion.length < 4) return "";
         const codigo = descripcion.split('::')[0].trim();
@@ -88,7 +88,7 @@ const getAdirContext = async (descripcion) => {
 
         if (!data || data.length === 0) return "";
         return data.map(r => 
-            `- [ADIR OFICIAL]: ${r.descripcion_corta} (${r.codigo}). Precio: ${r.precio_total}€/${r.unidad}. (MO: ${r.mano_de_obra}€, Otros: ${r.materiales_y_otros}€)`
+            `- [BASE PROPIA]: ${r.descripcion_corta} (${r.codigo}). Precio: ${r.precio_total}€/${r.unidad}. (MO: ${r.mano_de_obra}€, Otros: ${r.materiales_y_otros}€)`
         ).join('\n');
     } catch (e) { return ""; }
 };
@@ -137,8 +137,8 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
     // Procesa un único batch (idéntico al cuerpo del bucle original).
     const procesarBatch = async (batch) => {
         const contextPromises = batch.map(async (item) => {
-            const [adirContext, histResult, cypeContext] = await Promise.all([
-                getAdirContext(item.desc),
+            const [basePropiaContext, histResult, cypeContext] = await Promise.all([
+                getBasePropiaContext(item.desc),
                 getHistoricalContext(item.desc),
                 getCypeContext(item.desc),
             ]);
@@ -148,7 +148,7 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
             const tieneUnidadPrevia = !!unidadPrevia;
 
             let combinedContext = "";
-            if (adirContext) combinedContext += `\nBASE DE PRECIOS ADIR (PRIORIDAD ALTA):\n${adirContext}`;
+            if (basePropiaContext) combinedContext += `\nBASE DE PRECIOS PROPIA (PRIORIDAD ALTA):\n${basePropiaContext}`;
             if (histResult.context) combinedContext += `\nDATOS HISTÓRICOS ADJUDICADOS:\n${histResult.context}`;
             combinedContext += `\nDATOS CYPE MURCIA:\n${cypeContext}`;
 
@@ -166,8 +166,8 @@ export const asignarProveedoresIA = async (partidas, proveedores, onProgress) =>
         const prompt = `Eres Auditor de Costos de Construcción 2026. Valora estas TAREAS de obra.
 
 REGLAS PARA ASIGNAR PRECIO (ORDEN DE PRIORIDAD):
-1. BASE ADIR OFICIAL: Si existe dato "BASE DE PRECIOS ADIR", úsalo como PRECIO BASE. Es la referencia interna prioritaria.
-2. HISTÓRICO REAL: Si no hay base ADIR pero hay "HISTÓRICOS ADJUDICADOS", úsalos como precio.
+1. BASE PROPIA OFICIAL: Si existe dato "BASE DE PRECIOS PROPIA", úsalo como PRECIO BASE. Es la referencia interna prioritaria.
+2. HISTÓRICO REAL: Si no hay base propia pero hay "HISTÓRICOS ADJUDICADOS", úsalos como precio.
 3. CYPE MURCIA: Solo como referencia de mercado si no hay datos internos.
 4. Si ninguna fuente tiene dato, estima el precio razonable para Murcia 2026.
 
@@ -266,6 +266,19 @@ ${bloquesContexto.map(b => b.contextStr).join('\n\n---\n\n')}`;
                 } else {
                     lote = content; // Fallback: usar el objeto entero
                 }
+            }
+
+            // Normalizar si el LLM devolvió una lista en vez de un mapa por IDs
+            if (Array.isArray(lote)) {
+                const mapFromArray = {};
+                lote.forEach((el, idx) => {
+                    if (el && typeof el === 'object') {
+                        const k = el.id || el.ID || el.tarea_id || el.tarea || el.codigo;
+                        if (k) mapFromArray[k] = el;
+                        mapFromArray[idx] = el;
+                    }
+                });
+                lote = mapFromArray;
             }
 
             batch.forEach((item, batchIdx) => {
