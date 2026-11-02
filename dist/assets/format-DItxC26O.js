@@ -1,0 +1,1 @@
+const e=a=>(parseFloat(a)||0).toLocaleString("es-ES",{minimumFractionDigits:2,maximumFractionDigits:2}),c=a=>parseFloat((a||"0").replace(/\./g,"").replace(",","."))||0,r=a=>e(a)+" €",i=(a,t)=>{const o=parseFloat(a)||0,s=parseFloat(t)||0;return o*(1+s/100)};export{i as a,e as b,r as f,c as p};
