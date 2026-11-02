@@ -686,7 +686,7 @@ function PanelEstimacionTrabajo({ item, onClose }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
         <MiniStat label="Precio material" value={`${pMat.toFixed(2)} €/${item.unidad || 'ud'}`}
-          color="var(--primary)" sub={`Fuente: ${item.fuente || 'ADIR'} · ${item.fecha_actualizacion || '—'}`} />
+          color="var(--primary)" sub={`Fuente: ${item.fuente || 'Base Propia'} · ${item.fecha_actualizacion || '—'}`} />
         {pTrabajoEstimado && (
           <>
             <MiniStat label="Trabajo completo estimado"
@@ -807,7 +807,7 @@ const BasePrecios = () => {
       const { error } = await supabase.from(table).update(payload).eq('codigo', codigo);
       if (error) throw new Error(error.message || JSON.stringify(error));
       await supabase.from('historial_cambios').insert({
-        origen_cambio: 'Manual', tipo_entidad: activeTab === 'adir' ? 'Base ADIR' : 'Base CYPE',
+        origen_cambio: 'Manual', tipo_entidad: activeTab === 'adir' ? 'Base Propia' : 'Base CYPE',
         entidad_id: codigo, campo_modificado: 'Precio Total',
         valor_anterior: String(orig?.precio_total || 0), valor_nuevo: String(payload.precio_total),
         detalles: orig?.descripcion_corta,
@@ -852,7 +852,7 @@ const BasePrecios = () => {
       {/* Tabs + tabla */}
       <div className="glass-card" style={{ marginBottom: '20px', padding: '0' }}>
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
-          {[['adir', <Database size={18} />, 'Base Oficial ADIR'],
+          {[['adir', <Database size={18} />, 'Base Oficial Propia'],
             ['cype', <TableProperties size={18} />, 'Base CYPE Murcia']].map(([tab, icon, label]) => (
             <button key={tab}
               style={{
@@ -961,7 +961,7 @@ const BasePrecios = () => {
                         <td style={{ fontSize: '0.82rem' }}>{activeTab === 'adir' ? item.materiales_y_otros : item.materiales}</td>
                         <td style={{ fontSize: '0.82rem' }}>{item.maquinaria || 0}</td>
                         <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{item.precio_total}</td>
-                        <td style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{item.fuente || (activeTab === 'adir' ? 'ADIR' : 'CYPE')}</td>
+                        <td style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>{item.fuente || (activeTab === 'adir' ? 'Base Propia' : 'CYPE')}</td>
                         <td style={{ fontSize: '0.73rem', color: 'var(--text-muted)' }}>
                           {(item.fecha_actualizacion || item.fecha)
                             ? new Date(item.fecha_actualizacion || item.fecha).toLocaleDateString('es-ES', { month: 'short', year: 'numeric' })

@@ -218,7 +218,7 @@ const BandejaEntrada = () => {
         
         setActionLoading(prev => ({ ...prev, [proyectoId]: true }));
         try {
-            console.log("Iniciando borrado verificado de:", proyectoId);
+
             const proyectoNombre = editTitles[proyectoId] || proyectoId.split('_')[0];
 
             // 1. Borramos partidas asociadas
@@ -432,7 +432,7 @@ const BandejaEntrada = () => {
                                                 className="btn"
                                                 style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--error)', border: '1px solid var(--error)' }}
                                                 onClick={() => {
-                                                    console.log("Pulsado RECHAZAR para:", p.Proyecto);
+
                                                     handleReject(p.Proyecto);
                                                 }}
                                                 disabled={!!actionLoading[p.Proyecto]}
@@ -444,7 +444,7 @@ const BandejaEntrada = () => {
                                                 className="btn btn-primary"
                                                 style={{ flex: 1.5, backgroundColor: 'var(--success)' }}
                                                 onClick={() => {
-                                                    console.log("Pulsado ACEPTAR para:", p.Proyecto);
+
                                                     handleAccept(p.Proyecto);
                                                 }}
                                                 disabled={!!actionLoading[p.Proyecto]}
