@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { N8N_BASE_URL } from '../config';
 import { supabase } from '../utils/supabaseClient';
 import { useModal, useToast } from '../utils/useModal';
-import { Loader2, Bot, ArrowLeft, ArrowRight, Hash, Save, Trash2, Send, RefreshCw, Mail, Search, FileDown, ClipboardCheck, Folder, Calendar, User, Users, CheckSquare, Square, Check, X, Trophy, Paperclip, HardHat, Files, AlertTriangle, Clock, Timer } from 'lucide-react';
+import { Loader2, Bot, ArrowLeft, ArrowRight, Hash, Save, Trash2, Send, RefreshCw, Mail, Search, FileDown, ClipboardCheck, Folder, Calendar, User, Users, CheckSquare, Square, Check, X, Paperclip, HardHat, Files, AlertTriangle, Clock, Timer } from 'lucide-react';
 
 // ── Calcula días restantes sobre el plazo de 15 días ─────────────────────────
 const getDeadlineInfo = (fechaRef, dias = 15) => {
@@ -57,9 +57,11 @@ const DeadlineBadge = ({ fechaRef, compact = false }) => {
 };
 import { asignarProveedoresIA, TODOS_LOS_OFICIOS, getCleanProjectName } from '../utils/aiAllocation';
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
-import { escapeHtml, cleanText } from '../utils/escape';
-import { formatDecimal, parseDecimal, fmtEuro, aplicarBeneficio } from '../utils/format';
-import { normalizarYOrdenarPartidas, getTipoFila, calcularTotalPartidas } from '../utils/partidas';
+import { escapeHtml } from '../utils/escape';
+import { fmtEuro, aplicarBeneficio } from '../utils/format';
+import { normalizarYOrdenarPartidas, calcularTotalPartidas, mapearPartidasDesdeBD, actualizarCampoPartida, perteneceACapitulo } from '../utils/partidas';
+import { useBeneficioProyecto } from '../hooks/useBeneficioProyecto';
+import PartidasTable from '../components/PartidasTable';
 
 const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     const { ModalUI } = useModal();
@@ -73,20 +75,18 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     const [activeProject, setActiveProject] = useState(null);
     const [partidas, setPartidas] = useState([]);
     const [proveedores, setProveedores] = useState([]);
-    const [loadingProject, setLoadingProject] = useState(false);
+    const [, setLoadingProject] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [defaultBeneficioPct, setDefaultBeneficioPct] = useState(0);
-    const [savingBeneficio, setSavingBeneficio] = useState(false);
-
-    // % de beneficio por defecto (Ajustes), cargado una vez.
-    useEffect(() => {
-        supabase.from('configuracion').select('valor').eq('clave', 'beneficio_pct').maybeSingle()
-            .then(({ data }) => { if (data?.valor) setDefaultBeneficioPct(parseFloat(data.valor) || 0); });
-    }, []);
+    const {
+        defaultBeneficioPct,
+        savingBeneficio,
+        beneficioPct,
+        guardarBeneficioProyecto
+    } = useBeneficioProyecto(activeProject, setActiveProject, showToast);
 
     // Estado de la IA y Módulos Avanzados
     const [aiLoading, setAiLoading] = useState(false);
-    const [aiProgress, setAiProgress] = useState(0);
+    const [, setAiProgress] = useState(0);
     const [histLoading, setHistLoading] = useState(false);
 
     const [selectedOficio, setSelectedOficio] = useState("");
@@ -106,7 +106,6 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
 
     const [showLicitationModal, setShowLicitationModal] = useState(false);
     const [solicitudesActivas, setSolicitudesActivas] = useState([]);
-    const [rawInputs, setRawInputs] = useState({});
     const [anexoFile, setAnexoFile] = useState(null);
     const [anexoFileName, setAnexoFileName] = useState('');
     const [uploadingAnexo, setUploadingAnexo] = useState(false);
@@ -194,7 +193,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     const confirmDelete = async (project) => {
         setLoading(true);
         try {
-            console.log("Iniciando borrado verificado de proyecto:", project.Proyecto);
+
             
             // 1. Borrar de solicitudes si las hubiera
             await supabase.from('solicitudes').delete().eq('propuesta_id', project.Proyecto);
@@ -303,32 +302,10 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             }
 
             if (partidasData) {
-                const mappedPartidas = partidasData.map(p => {
-                    const capCode = p.texto_partida ? p.texto_partida.split('::')[0] : "";
-                    const descClean = cleanText(p.texto_partida);
-                    const finalPrice = (p.precio_adjudicado && parseFloat(p.precio_adjudicado) > 0) 
-                        ? parseFloat(p.precio_adjudicado) 
-                        : (p.precio_base_estimado || 0);
-
-                    const needsQuote = (!finalPrice || finalPrice === 0);
-
-                    return {
-                        ...p,
-                        Capítulo: capCode,
-                        Descripción: descClean,
-                        "Oficio Asignado": p.oficio_asignado || "Sin asignar",
-                        "Precio Total (€)": finalPrice,
-                        Cantidad: p.cantidad || 0,
-                        "Precio IA": p.precio_ia || 0,
-                        "Unidad IA": p.unidad || "",
-                        "Needs Quote": p.force_quote !== undefined ? p.force_quote : needsQuote
-                    };
-                });
-                // Normalización compartida: elimina título raíz, agrupa partidas
-                // sueltas bajo "99_EXTRAS" y ordena por código de capítulo.
-                // (lógica común con JefesObra → src/utils/partidas.js)
+                const mappedPartidas = mapearPartidasDesdeBD(partidasData, (p, finalPrice) => ({
+                    "Needs Quote": p.force_quote !== undefined ? p.force_quote : (!finalPrice || finalPrice === 0)
+                }));
                 const sorted = normalizarYOrdenarPartidas(mappedPartidas);
-
                 setPartidas(sorted);
             }
         } catch (error) {
@@ -354,7 +331,8 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                         precio_ia: isNaN(precioIA) ? null : precioIA,
                         unidad: p["Unidad IA"] || null,
                         cantidad: parseFloat(p.Cantidad) || 0,
-                        force_quote: p["Needs Quote"] ? 1 : 0
+                        force_quote: p["Needs Quote"] ? 1 : 0,
+                        ...(p.texto_partida ? { texto_partida: p.texto_partida } : {})
                     };
                     // Never overwrite precio_base_estimado for adjudicated partidas
                     // — their real price lives in precio_adjudicado
@@ -533,7 +511,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             });
             let aplicadas = 0;
             const asignaciones = resultado?.asignaciones || {};
-            console.log('[Borradores IA] Asignaciones recibidas:', Object.keys(asignaciones).length, asignaciones);
+
             
             const nuevasPartidas = partidas.map((p, idx) => {
                 const cap = p.Capítulo || p.Capitulo || '';
@@ -565,7 +543,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                 }
                 return p;
             });
-            console.log(`[Borradores IA] Partidas evaluadas: ${partidas.length}, aplicadas: ${aplicadas}`);
+
             if (aplicadas > 0) {
                 setPartidas(nuevasPartidas);
                 setHasUnsavedChanges(true);
@@ -575,7 +553,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
         finally { setAiLoading(false); setAiProgress(0); }
     };
 
-    const toggleNeedsQuote = (idx) => {
+    const _toggleNeedsQuote = (idx) => {
         const copy = [...partidas];
         copy[idx]["Needs Quote"] = !copy[idx]["Needs Quote"];
         setPartidas(copy);
@@ -583,29 +561,17 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     };
 
     const updatePrice = (idx, newVal) => {
-        const copy = [...partidas];
-        const val = parseFloat(newVal) || 0;
-        copy[idx]["Precio Total (€)"] = val;
-        copy[idx].isModified = true;
-        copy[idx].origen_modificacion = 'Manual';
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Precio Total (€)", newVal, { origen_modificacion: 'Manual' }));
         setHasUnsavedChanges(true);
     };
 
     const updateUnidad = (idx, newVal) => {
-        const copy = [...partidas];
-        copy[idx]["Unidad IA"] = newVal;
-        copy[idx].unidad_asignada_por_ia = false; // el usuario la edita manualmente → quitar naranja
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Unidad IA", newVal, { unidad_asignada_por_ia: false }));
         setHasUnsavedChanges(true);
     };
 
     const updateCantidad = (idx, newVal) => {
-        const copy = [...partidas];
-        copy[idx].Cantidad = newVal;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Cantidad", newVal));
         setHasUnsavedChanges(true);
     };
 
@@ -647,8 +613,8 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
         tareasOficio.forEach(t => {
             const code = (t.Capítulo || '').trim();
             headers.forEach(h => {
-                const hCode = (h.Capítulo || '').replace(/#$/, '');
-                if (hCode && (code === hCode || code.startsWith(hCode + '.'))) {
+                const hCode = (h.Capítulo || '').replace(/#+$/, '').trim();
+                if (hCode && (code === hCode || perteneceACapitulo(code, h.Capítulo))) {
                     relevantes.add(h.Capítulo);
                 }
             });
@@ -793,7 +759,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
 
             for (const prov of provs) {
                 if (pendingProvIds.has(String(prov.id))) {
-                    console.info(`[Licitación] Saltando ${prov.Nombre} - ya tiene solicitud pendiente sin responder.`);
+
                     saltados++;
                     continue;
                 }
@@ -875,10 +841,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     };
 
     const updateOficio = (idx, newOficio) => {
-        const copy = [...partidas];
-        copy[idx]["Oficio Asignado"] = newOficio;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Oficio Asignado", newOficio));
         setHasUnsavedChanges(true);
     };
 
@@ -893,7 +856,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                 partidas,
                 precio_total: precioTotal,
                 fecha:        new Date().toISOString(),
-                titulo:       'Borrador de Presupuesto',
+                titulo:       'Borrador de Presupuesto', esBorrador: true, beneficioPct,
             });
             const fname = 'Borrador_' + (activeProject.Proyecto || 'presupuesto').replace(/[^a-zA-Z0-9_-]/g, '_');
             descargarPDF(doc, fname);
@@ -931,23 +894,6 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     };
 
     const budgetTotal = calcularTotalPartidas(partidas);
-    // % de beneficio efectivo del proyecto (override de la propuesta o el de Ajustes).
-    const beneficioPct = (activeProject?.beneficio_pct !== null && activeProject?.beneficio_pct !== undefined && activeProject?.beneficio_pct !== '')
-        ? parseFloat(activeProject.beneficio_pct)
-        : defaultBeneficioPct;
-
-    const guardarBeneficioProyecto = async (nuevoPct) => {
-        const pct = nuevoPct === '' ? null : parseFloat(String(nuevoPct).replace(',', '.'));
-        if (pct !== null && (isNaN(pct) || pct < 0 || pct > 100)) { showToast('% de beneficio inválido (0–100).', 'error'); return; }
-        setSavingBeneficio(true);
-        try {
-            const { error } = await supabase.from('propuestas').update({ beneficio_pct: pct }).eq('Proyecto', activeProject.Proyecto);
-            if (error) throw error;
-            setActiveProject(prev => ({ ...prev, beneficio_pct: pct }));
-            showToast('% de beneficio del proyecto guardado.');
-        } catch (e) { showToast('Error al guardar el %: ' + (e.message || e), 'error'); }
-        finally { setSavingBeneficio(false); }
-    };
     const listaOficios = ["Sin asignar", ...[...new Set([...TODOS_LOS_OFICIOS, ...proveedores.map(p => p.Oficio)])].sort()];
     const oficiosAsignados = [...new Set((partidas || []).map(p => p["Oficio Asignado"]).filter(o => o !== "Sin asignar"))];
 
@@ -1118,155 +1064,15 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                     </div>
 
                     <div className="glass-card">
-                        <div className="table-container">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th style={{ width: '80px' }}>Cap.</th>
-                                        <th>Descripción de la Partida</th>
-                                        <th style={{ width: '80px', textAlign: 'center' }}>Cant.</th>
-                                        <th style={{ width: '60px', textAlign: 'center' }}>Ud.</th>
-                                        <th style={{ width: '120px', textAlign: 'right' }}>Precio/ud (€)</th>
-                                        <th style={{ width: '120px', textAlign: 'right' }}>Total (€)</th>
-                                        <th style={{ width: '110px', textAlign: 'right' }}>Est. IA (€)</th>
-                                        <th style={{ width: '190px' }}>Oficio Asignado</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {partidas.map((p, idx) => {
-                                        const tipoFila = getTipoFila(p);
-                                        const esCapitulo = tipoFila === 'capitulo';
-                                        const esSubcapitulo = tipoFila === 'subcapitulo';
-                                        const esPartida = tipoFila === 'partida';
-                                        const precioIA = parseFloat(p["Precio IA"]) || 0;
-                                        const justif = p["Justificacion IA"] || "";
-
-                                        // Estilos integrados y suaves por nivel
-                                        // Capítulo: --bg-secondary (azul claro), texto --primary
-                                        // Subcapítulo: punto medio — fondo ligeramente coloreado, texto --text-muted más oscuro
-                                        // Partida: fondo transparent, texto normal
-                                        let rowStyle = { backgroundColor: 'transparent' };
-                                        let codStyle = { fontWeight: 500, color: 'var(--text-muted)', paddingLeft: '8px', verticalAlign: 'middle' };
-                                        let descStyle = { fontSize: '0.9rem', lineHeight: '1.4', color: 'var(--text-main)', fontWeight: 400, paddingLeft: '8px', verticalAlign: 'middle' };
-                                        // Celdas vacías en cap/subcap también necesitan verticalAlign para consistencia
-                                        const emptyCell = { verticalAlign: 'middle', textAlign: 'center' };
-
-                                        if (esCapitulo) {
-                                            // Nivel superior: El más oscuro de la jerarquía (punto medio entre bg-secondary y primary-light)
-                                            rowStyle = { backgroundColor: '#dce7f2', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' };
-                                            codStyle = { ...codStyle, fontWeight: 800, color: 'var(--primary)', fontSize: '0.92rem', paddingLeft: '10px' };
-                                            descStyle = { ...descStyle, fontWeight: 700, color: 'var(--primary)', fontSize: '0.92rem' };
-                                        } else if (esSubcapitulo) {
-                                            // Nivel medio: Tono más claro (bg-secondary)
-                                            rowStyle = { backgroundColor: 'var(--bg-secondary)' };
-                                            codStyle = { ...codStyle, fontWeight: 700, color: '#2a5a8a', fontSize: '0.88rem', paddingLeft: '10px' };
-                                            descStyle = { ...descStyle, fontWeight: 600, color: '#2a5a8a', fontSize: '0.88rem', paddingLeft: '8px' };
-                                        }
-
-                                        return (
-                                            <tr key={idx} style={rowStyle}>
-                                                <td style={codStyle}>
-                                                    {p.Capítulo?.replace(/#$/, '')}
-                                                </td>
-                                                <td style={descStyle}>
-                                                    {p.Descripción}
-                                                </td>
-                                                <td style={{ ...emptyCell }}>
-                                                    {esPartida && <input
-                                                        type="text"
-                                                        value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
-                                                        onChange={(e) => setRawInputs(prev => ({ ...prev, [`cant_${idx}`]: e.target.value }))}
-                                                        onBlur={(e) => {
-                                                            const v = parseDecimal(e.target.value);
-                                                            updateCantidad(idx, v);
-                                                            setRawInputs(prev => { const n = { ...prev }; delete n[`cant_${idx}`]; return n; });
-                                                        }}
-                                                        style={{ width: '70px', textAlign: 'center', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                                                    />}
-                                                </td>
-                                                <td style={{ ...emptyCell }}>
-                                                    {esPartida && (
-                                                        <input
-                                                            type="text"
-                                                            value={p['Unidad IA']}
-                                                            onChange={(e) => updateUnidad(idx, e.target.value)}
-                                                            title={p.unidad_asignada_por_ia ? '🤖 Unidad asignada por IA — edita para confirmar' : ''}
-                                                            style={{
-                                                                width: '55px',
-                                                                textAlign: 'center',
-                                                                borderRadius: '4px',
-                                                                border: p.unidad_asignada_por_ia
-                                                                    ? '1.5px solid #f97316'
-                                                                    : '1px solid var(--border-color)',
-                                                                background: p.unidad_asignada_por_ia ? '#fff7ed' : undefined,
-                                                                color: p.unidad_asignada_por_ia ? '#c2410c' : undefined,
-                                                                fontWeight: p.unidad_asignada_por_ia ? '700' : undefined,
-                                                            }}
-                                                        />
-                                                    )}
-                                                </td>
-                                                <td style={{ textAlign: 'right', verticalAlign: 'middle' }}>
-                                                    {esPartida && (
-                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px' }}>
-                                                            {p.estado_adjudicacion === 'Adjudicado' && <Trophy size={14} color="#059669" title="Precio adjudicado — solo modificable desde Comparativa" />}
-                                                            <input
-                                                                type="text"
-                                                                value={rawInputs[`price_${idx}`] ?? formatDecimal(p['Precio Total (€)'])}
-                                                                onChange={(e) => {
-                                                                    if (p.estado_adjudicacion === 'Adjudicado') return;
-                                                                    setRawInputs(prev => ({ ...prev, [`price_${idx}`]: e.target.value }));
-                                                                }}
-                                                                onBlur={(e) => {
-                                                                    if (p.estado_adjudicacion === 'Adjudicado') return;
-                                                                    const v = parseDecimal(e.target.value);
-                                                                    updatePrice(idx, v);
-                                                                    setRawInputs(prev => { const n = { ...prev }; delete n[`price_${idx}`]; return n; });
-                                                                }}
-                                                                readOnly={p.estado_adjudicacion === 'Adjudicado'}
-                                                                title={p.estado_adjudicacion === 'Adjudicado' ? 'Precio adjudicado — solo modificable desde Comparativa' : ''}
-                                                                style={{
-                                                                    width: '110px',
-                                                                    textAlign: 'right',
-                                                                    fontWeight: p.estado_adjudicacion === 'Adjudicado' ? 800 : 700,
-                                                                    color: p.estado_adjudicacion === 'Adjudicado' ? '#059669' : 'var(--primary)',
-                                                                    background: p.estado_adjudicacion === 'Adjudicado' ? '#d1fae5' : 'transparent',
-                                                                    border: p.estado_adjudicacion === 'Adjudicado' ? '1px solid #10b981' : '1px solid var(--border-color)',
-                                                                    borderRadius: '4px',
-                                                                    padding: '4px',
-                                                                    cursor: p.estado_adjudicacion === 'Adjudicado' ? 'not-allowed' : 'text'
-                                                                }}
-                                                            />
-                                                        </div>
-                                                    )}
-                                                </td>
-                                                <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.88rem', verticalAlign: 'middle' }}>
-                                                    {esPartida && (
-                                                        fmtEuro((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
-                                                    )}
-                                                </td>
-                                                <td style={{ textAlign: 'right' }}>
-                                                    {esPartida && precioIA > 0 && (
-                                                        <div title={justif || "Sin justificación"} style={{ cursor: justif ? 'help' : 'default' }}>
-                                                            <span style={{ fontSize: '0.88rem', color: esCapitulo ? 'rgba(255,255,255,0.8)' : 'var(--text-muted)', fontStyle: 'italic' }}>
-                                                                {precioIA.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                            </span>
-                                                            {justif && (
-                                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', opacity: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '120px' }}>
-                                                                    {justif}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    {esPartida && <select value={p["Oficio Asignado"]} onChange={(e) => updateOficio(idx, e.target.value)} style={{ width: '100%' }}>{listaOficios.map(of => <option key={of} value={of}>{of}</option>)}</select>}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        </div>
+                        <PartidasTable
+                            mode="borradores" beneficioPct={beneficioPct}
+                            partidas={partidas}
+                            listaOficios={listaOficios}
+                            onUpdateCantidad={updateCantidad}
+                            onUpdateUnidad={updateUnidad}
+                            onUpdatePrice={updatePrice}
+                            onUpdateOficio={updateOficio}
+                        />
                     </div>
                 </div>
 
@@ -1428,7 +1234,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
             ) : proyectos.length > 0 ? (
                 <div className="project-grid">
                     {proyectos.map((pro, idx) => (
-                        <div key={idx} className="project-card animate-fade-in">
+                        <div key={pro.Proyecto || pro.id || idx} className="project-card animate-fade-in">
                             <div className="project-card-header">
                                 <div className="project-card-info">
                                     <h3 className="project-card-title">{getCleanProjectName(pro.Proyecto)}</h3>

@@ -5,12 +5,14 @@ import { useAuth } from '../context/AuthContext';
 import { useModal, useToast, Modal } from '../utils/useModal';
 import {
   Loader2, RefreshCw, HardHat, FileText, ArrowLeft, CheckCircle,
-  X, AlertCircle, Trophy, User, Calendar, Briefcase, Trash2, MessageSquare
+  X, AlertCircle, User, Calendar, Briefcase, Trash2, MessageSquare
 } from 'lucide-react';
 import { TODOS_LOS_OFICIOS, getCleanProjectName } from '../utils/aiAllocation';
-import { escapeHtml, cleanText } from '../utils/escape';
-import { formatDecimal, parseDecimal, fmtEuro, aplicarBeneficio } from '../utils/format';
-import { normalizarYOrdenarPartidas, getTipoFila } from '../utils/partidas';
+import { escapeHtml } from '../utils/escape';
+import { fmtEuro, aplicarBeneficio } from '../utils/format';
+import { normalizarYOrdenarPartidas, getTipoFila, mapearPartidasDesdeBD, actualizarCampoPartida, calcularTotalesCapitulos, calcularTotalPartidas } from '../utils/partidas';
+import { useBeneficioProyecto } from '../hooks/useBeneficioProyecto';
+import PartidasTable from '../components/PartidasTable';
 
 const JefesObra = () => {
     const { user } = useAuth();
@@ -43,41 +45,13 @@ const JefesObra = () => {
     const [metadataForm, setMetadataForm] = useState({ nombre_proyecto: '', cliente: '', cliente_email: '' });
     const [projectToDelete, setProjectToDelete] = useState(null);
     const [deleting, setDeleting] = useState(false);
-    const [rawInputs, setRawInputs] = useState({});
     const [oficiosDinamicos, setOficiosDinamicos] = useState(TODOS_LOS_OFICIOS);
-    const [defaultBeneficioPct, setDefaultBeneficioPct] = useState(0);
-    const [savingBeneficio, setSavingBeneficio] = useState(false);
-
-    // % de beneficio efectivo del proyecto: override de la propuesta o el de Ajustes.
-    const beneficioPct = (activeProject?.beneficio_pct !== null && activeProject?.beneficio_pct !== undefined && activeProject?.beneficio_pct !== '')
-        ? parseFloat(activeProject.beneficio_pct)
-        : defaultBeneficioPct;
-
-    // Cargar el % de beneficio por defecto (Ajustes) una vez al montar.
-    useEffect(() => {
-        supabase.from('configuracion').select('valor').eq('clave', 'beneficio_pct').maybeSingle()
-            .then(({ data }) => { if (data?.valor) setDefaultBeneficioPct(parseFloat(data.valor) || 0); });
-    }, []);
-
-    // Guarda el % de beneficio del proyecto (override) en la propuesta.
-    const guardarBeneficioProyecto = async (nuevoPct) => {
-        const pct = nuevoPct === '' ? null : parseFloat(String(nuevoPct).replace(',', '.'));
-        if (pct !== null && (isNaN(pct) || pct < 0 || pct > 100)) {
-            showToast('% de beneficio inválido (0–100).', 'error');
-            return;
-        }
-        setSavingBeneficio(true);
-        try {
-            const { error } = await supabase.from('propuestas').update({ beneficio_pct: pct }).eq('Proyecto', activeProject.Proyecto);
-            if (error) throw error;
-            setActiveProject(prev => ({ ...prev, beneficio_pct: pct }));
-            showToast('% de beneficio del proyecto guardado.');
-        } catch (e) {
-            showToast('Error al guardar el %: ' + (e.message || e), 'error');
-        } finally {
-            setSavingBeneficio(false);
-        }
-    };
+    const {
+        defaultBeneficioPct,
+        savingBeneficio,
+        beneficioPct,
+        guardarBeneficioProyecto
+    } = useBeneficioProyecto(activeProject, setActiveProject, showToast);
 
 
     const fetchProyectos = React.useCallback(async () => {
@@ -188,28 +162,13 @@ const JefesObra = () => {
             });
             setRespuestasPorPartida(respMap);
             
-            const mapped = (pData || []).map(p => {
-                const capCode = p.texto_partida ? p.texto_partida.split('::')[0] : "";
-                const descClean = cleanText(p.texto_partida);
-                const finalPrice = (p.precio_adjudicado && parseFloat(p.precio_adjudicado) > 0)
-                    ? parseFloat(p.precio_adjudicado)
-                    : (p.precio_base_estimado || 0);
-
-                return {
-                    ...p,
-                    Capítulo: capCode,
-                    Descripción: descClean,
-                    "Precio Total (€)": finalPrice,
-                    "Oficio Asignado": p.oficio_asignado || "Sin asignar",
-                    Cantidad: p.cantidad !== undefined ? p.cantidad : 0,
-                    "Unidad IA": p.unidad || "",
-                    valor_anterior_precio: finalPrice,
-                    valor_anterior_oficio_id: p.proveedor_adjudicado_id || null,
-                    aprobado: false,
-                    isModified: false,
-                    solicitud_seleccionada_id: null
-                };
-            });
+            const mapped = mapearPartidasDesdeBD(pData, (p, finalPrice) => ({
+                valor_anterior_precio: finalPrice,
+                valor_anterior_oficio_id: p.proveedor_adjudicado_id || null,
+                aprobado: false,
+                isModified: false,
+                solicitud_seleccionada_id: null
+            }));
 
             // Normalización compartida: elimina título raíz, agrupa partidas sueltas
             // bajo "99_EXTRAS" y ordena por código. Los campos extra del header de
@@ -317,31 +276,19 @@ const JefesObra = () => {
     };
 
     const updatePrice = (idx, val) => {
-        const copy = [...partidas];
-        copy[idx]["Precio Total (€)"] = parseFloat(val) || 0;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Precio Total (€)", val));
     };
 
     const updateOficio = (idx, val) => {
-        const copy = [...partidas];
-        copy[idx]["Oficio Asignado"] = val;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Oficio Asignado", val));
     };
 
     const updateCantidad = (idx, val) => {
-        const copy = [...partidas];
-        copy[idx].Cantidad = val;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Cantidad", val));
     };
 
     const updateUnidad = (idx, val) => {
-        const copy = [...partidas];
-        copy[idx]["Unidad IA"] = val;
-        copy[idx].isModified = true;
-        setPartidas(copy);
+        setPartidas(prev => actualizarCampoPartida(prev, idx, "Unidad IA", val));
     };
 
     const updateProveedor = (idx, solId) => {
@@ -393,30 +340,6 @@ const JefesObra = () => {
         }
     };
 
-    // Calcula el total de un capítulo/subcapítulo sumando todas sus partidas descendientes
-    const calcularTotalesCapitulos = (todasPartidas) => {
-        const totales = {};
-        const headers = todasPartidas.filter(p => getTipoFila(p) !== 'partida');
-        const items   = todasPartidas.filter(p => getTipoFila(p) === 'partida');
-
-        for (const header of headers) {
-            const hCode    = (header.Capítulo || '').replace(/#+$/, '');
-            const isExtras = hCode === '99_EXTRAS';
-            const hIdx     = todasPartidas.indexOf(header);
-
-            totales[header.Capítulo] = items.reduce((acc, item) => {
-                const iIdx  = todasPartidas.indexOf(item);
-                const iCode = (item.Capítulo || '').trim();
-                const match = isExtras
-                    ? iIdx > hIdx
-                    : iCode === hCode || iCode.startsWith(hCode + '.');
-                if (!match) return acc;
-                return acc + (parseFloat(item['Precio Total (€)']) || 0) * (parseFloat(item.Cantidad) || 1);
-            }, 0);
-        }
-        return totales;
-    };
-
     // Sanitiza una partida antes de guardarla en la BD — elimina todos los campos
     // de estado React que no necesita el portal del cliente ni el PDF.
     // El precio del cliente = coste × (1 + beneficio%). El margen se incrusta aquí,
@@ -447,7 +370,8 @@ const JefesObra = () => {
                     cantidad: parseFloat(p.Cantidad) || 0,
                     unidad: p["Unidad IA"] || null,
                     proveedor_adjudicado_id: p.proveedor_adjudicado_id || null,
-                    estado_adjudicacion: p.proveedor_adjudicado_id ? 'Adjudicado' : null
+                    estado_adjudicacion: p.proveedor_adjudicado_id ? 'Adjudicado' : null,
+                    ...(p.texto_partida ? { texto_partida: p.texto_partida } : {})
                 };
                 return supabase.from('partidas').update(dataToUpdate).eq('id', p.id);
             });
@@ -491,9 +415,7 @@ const JefesObra = () => {
 
             // ─── Crear presupuesto para cliente y enviar email ───
             const token = crypto.randomUUID();
-            const precioTotalCoste = partidas
-                .filter(p => !p.Capítulo?.endsWith('#'))
-                .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1), 0);
+            const precioTotalCoste = calcularTotalPartidas(partidas);
             // El cliente ve el PVP: coste + beneficio incrustado.
             const precioTotal = aplicarBeneficio(precioTotalCoste, beneficioPct);
 
@@ -878,9 +800,7 @@ const JefesObra = () => {
                                     Total presupuesto ({partidas.filter(p => !p.Capítulo?.endsWith('#')).length} partidas)
                                 </span>
                                 {(() => {
-                                    const costeTotal = partidas
-                                        .filter(p => !p.Capítulo?.endsWith('#'))
-                                        .reduce((acc, p) => acc + (parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1), 0);
+                                    const costeTotal = calcularTotalPartidas(partidas);
                                     return (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
                                             <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
@@ -913,162 +833,20 @@ const JefesObra = () => {
                             {loadingProject ? (
                                 <div style={{ textAlign: 'center', padding: '40px' }}><Loader2 className="loader-spinner" size={32} /></div>
                             ) : (
-                                <div className="table-container">
-                                    <table style={{ borderCollapse: 'collapse' }}>
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '50px', textAlign: 'center' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        onChange={toggleAllAprobado}
-                                                        checked={partidas.filter(p => !(p.Capítulo && p.Capítulo.endsWith('#'))).length > 0 && partidas.filter(p => !(p.Capítulo && p.Capítulo.endsWith('#'))).every(p => p.aprobado)}
-                                                        style={{ transform: 'scale(1.2)', cursor: 'pointer' }}
-                                                        title="Marcar / Desmarcar todas"
-                                                    />
-                                                </th>
-                                                <th>Capítulo</th>
-                                                <th>Descripción</th>
-                                                <th style={{ width: '60px', textAlign: 'center' }}>Cant.</th>
-                                                <th style={{ width: '55px', textAlign: 'center' }}>Ud.</th>
-                                                <th style={{ width: '120px' }}>Oficio</th>
-                                                <th>Proveedor / Oferta</th>
-                                                <th style={{ width: '100px', textAlign: 'right' }}>Precio/ud (€)</th>
-                                                <th style={{ width: '100px', textAlign: 'right' }}>Total (€)</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {partidas.map((p, idx) => {
-                                                const tipoFila = getTipoFila(p);
-                                                const esCapitulo   = tipoFila === 'capitulo';
-                                                const esSubcap     = tipoFila === 'subcapitulo';
-                                                const esPartida    = tipoFila === 'partida';
-                                                const capClean = (p.Capítulo || '').replace(/#+/g, '');
-
-                                                let rowStyle = { backgroundColor: 'transparent' };
-                                                let codStyle = { fontWeight: 500, color: 'var(--text-muted)', paddingLeft: '8px', verticalAlign: 'middle' };
-                                                let descStyle = { fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 400, paddingLeft: '8px', verticalAlign: 'middle' };
-
-                                                if (esCapitulo) {
-                                                    rowStyle = { backgroundColor: '#dce7f2', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' };
-                                                    codStyle = { ...codStyle, fontWeight: 800, color: 'var(--primary)', fontSize: '0.92rem', paddingLeft: '10px' };
-                                                    descStyle = { ...descStyle, fontWeight: 700, color: 'var(--primary)', fontSize: '0.92rem' };
-                                                } else if (esSubcap) {
-                                                    rowStyle = { backgroundColor: 'var(--bg-secondary)' };
-                                                    codStyle = { ...codStyle, fontWeight: 700, color: '#2a5a8a', fontSize: '0.88rem', paddingLeft: '10px' };
-                                                    descStyle = { ...descStyle, fontWeight: 600, color: '#2a5a8a', fontSize: '0.88rem' };
-                                                } else if (p.aprobado) {
-                                                    rowStyle = { backgroundColor: 'rgba(22, 163, 74, 0.05)' };
-                                                }
-
-                                                return (
-                                                    <tr key={idx} style={rowStyle}>
-                                                        <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <input type="checkbox" checked={p.aprobado} onChange={() => toggleAprobado(idx)} style={{ transform: 'scale(1.2)', cursor: 'pointer' }} />
-                                                            )}
-                                                        </td>
-                                                        <td style={codStyle}>{capClean}</td>
-                                                        <td style={descStyle}>
-                                                            {p.Descripción}
-                                                            {esPartida && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setComentarioModal({ idx, texto: p.comentario || '' })}
-                                                                    title={(p.comentario && p.comentario.trim()) ? 'Editar comentario' : 'Añadir comentario'}
-                                                                    style={{
-                                                                        marginLeft: 8, background: 'none', border: 'none', cursor: 'pointer',
-                                                                        padding: 2, verticalAlign: 'middle', lineHeight: 0,
-                                                                        color: (p.comentario && p.comentario.trim()) ? '#16a34a' : '#9ca3af'
-                                                                    }}
-                                                                >
-                                                                    <MessageSquare size={16} />
-                                                                </button>
-                                                            )}
-                                                        </td>
-                                                        <td style={{ textAlign: 'center', fontSize: '0.8rem', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <input
-                                                                    type="text"
-                                                                    value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
-                                                                    onChange={(e) => setRawInputs(prev => ({ ...prev, [`cant_${idx}`]: e.target.value }))}
-                                                                    onBlur={(e) => {
-                                                                        const v = parseDecimal(e.target.value);
-                                                                        updateCantidad(idx, v);
-                                                                        setRawInputs(prev => { const n = { ...prev }; delete n[`cant_${idx}`]; return n; });
-                                                                    }}
-                                                                    style={{ width: '60px', textAlign: 'center', padding: '4px', border: '1px solid var(--border-color)', borderRadius: '4px', backgroundColor: 'var(--bg-card)' }}
-                                                                />
-                                                            )}
-                                                        </td>
-                                                        <td style={{ textAlign: 'center', fontSize: '0.8rem', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <input
-                                                                    type="text"
-                                                                    value={p['Unidad IA'] || ''}
-                                                                    onChange={(e) => updateUnidad(idx, e.target.value)}
-                                                                    style={{ width: '50px', textAlign: 'center', padding: '4px', border: '1px solid var(--border-color)', borderRadius: '4px', backgroundColor: 'var(--bg-card)' }}
-                                                                />
-                                                            )}
-                                                        </td>
-                                                        <td style={{ fontSize: '0.8rem', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <select
-                                                                    style={{ width: '100%', padding: '4px', borderRadius: '4px', fontSize: '0.75rem', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
-                                                                    onChange={(e) => updateOficio(idx, e.target.value)}
-                                                                    value={p["Oficio Asignado"] || ''}
-                                                                >
-                                                                    <option value="Sin asignar">Sin asignar</option>
-                                                                    {p["Oficio Asignado"] && p["Oficio Asignado"] !== "Sin asignar" && !oficiosDinamicos.includes(p["Oficio Asignado"]) && (
-                                                                        <option value={p["Oficio Asignado"]}>{p["Oficio Asignado"]}</option>
-                                                                    )}
-                                                                    {oficiosDinamicos.map(of => (
-                                                                        <option key={of} value={of}>{of}</option>
-                                                                    ))}
-                                                                </select>
-                                                            )}
-                                                        </td>
-                                                        <td style={{ fontSize: '0.8rem', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <select
-                                                                    style={{ width: '100%', padding: '4px', borderRadius: '4px', fontSize: '0.75rem' }}
-                                                                    onChange={(e) => updateProveedor(idx, e.target.value)}
-                                                                    value={p.solicitud_seleccionada_id || ''}
-                                                                >
-                                                                    <option value="">-- Usar precio base --</option>
-                                                                    {(respuestasPorPartida[p.id] || []).map(r => (
-                                                                        <option key={r.solicitud_id} value={r.solicitud_id}>
-                                                                            {r.proveedor_nombre} ({r.precio_ofertado}€)
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
-                                                            )}
-                                                        </td>
-                                                        <td style={{ textAlign: 'right', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                <input
-                                                                    type="text"
-                                                                    value={rawInputs[`price_${idx}`] ?? formatDecimal(p['Precio Total (€)'])}
-                                                                    onChange={(e) => setRawInputs(prev => ({ ...prev, [`price_${idx}`]: e.target.value }))}
-                                                                    onBlur={(e) => {
-                                                                        const v = parseDecimal(e.target.value);
-                                                                        updatePrice(idx, v);
-                                                                        setRawInputs(prev => { const n = { ...prev }; delete n[`price_${idx}`]; return n; });
-                                                                    }}
-                                                                    style={{ width: '88px', textAlign: 'right', padding: '6px', border: '1px solid var(--border-color)', borderRadius: '4px', backgroundColor: 'var(--bg-card)' }}
-                                                                />
-                                                            )}
-                                                        </td>
-                                                        <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.85rem', verticalAlign: 'middle' }}>
-                                                            {esPartida && (
-                                                                fmtEuro((parseFloat(p['Precio Total (€)']) || 0) * (parseFloat(p.Cantidad) || 1))
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <PartidasTable
+                                    mode="jefes" beneficioPct={beneficioPct}
+                                    partidas={partidas}
+                                    listaOficios={oficiosDinamicos}
+                                    respuestasPorPartida={respuestasPorPartida}
+                                    onUpdateCantidad={updateCantidad}
+                                    onUpdateUnidad={updateUnidad}
+                                    onUpdatePrice={updatePrice}
+                                    onUpdateOficio={updateOficio}
+                                    onUpdateProveedor={updateProveedor}
+                                    onToggleAprobado={toggleAprobado}
+                                    onToggleAllAprobado={toggleAllAprobado}
+                                    onOpenComentario={(idx, texto) => setComentarioModal({ idx, texto })}
+                                />
                             )}
                         </div>
                     </div>

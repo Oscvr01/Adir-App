@@ -2,6 +2,8 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { logoBase64 } from '../assets/logoBase64';
 import { cleanText as cleanDesc } from './escape';
+import { aplicarBeneficio } from './format';
+import { calcularTotalesCapitulos, getTipoFila as getFilaTipoPDF } from './partidas';
 
 // ─── Colores corporativos ADIR (sincronizados con --primary: #002D54) ────────
 const AZUL        = [0, 45, 84];     // #002D54 — azul principal app
@@ -14,16 +16,6 @@ const GRIS_FILA   = [248, 249, 252]; // Fila alternada tabla
 const CAP_FILL    = [220, 231, 242]; // #dce7f2 — fondo capítulo (igual que UI Borradores)
 const SUB_FILL    = [236, 242, 249]; // más claro — fondo subcapítulo
 const SUB_TEXT    = [42, 90, 138];   // #2a5a8a — texto subcapítulo
-
-// Clasificador de fila (capítulo / subcapítulo / partida) — sincronizado con UI
-const getFilaTipoPDF = (p) => {
-    const cap = (p.Capítulo || p.Capitulo || '').trim();
-    if (!cap.endsWith('#')) return 'partida';
-    const limpio = cap.replace(/#$/, '');
-    if (limpio === '99_EXTRAS') return 'capitulo';
-    if (limpio.includes('.')) return 'subcapitulo';
-    return 'capitulo';
-};
 
 /**
  * Genera un PDF de presupuesto con diseño corporativo ADIR unificado.
@@ -54,6 +46,8 @@ export function generarPresupuestoPDF(data) {
         titulo        = 'Presupuesto de Obra',
         firma_base64  = null,
         fecha_firma   = null,
+        esBorrador    = false,
+        beneficioPct  = 0,
     } = data;
 
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -125,61 +119,107 @@ export function generarPresupuestoPDF(data) {
         return !cap.endsWith('#');
     });
 
+    // Precalcular totales de capítulo/subcapítulo para el caso de que no vengan en `precio_total_capitulo`
+    const getPrecioUnitarioPartida = (item) => {
+        if (esBorrador) {
+            return parseFloat(item['Precio Total (€)'] ?? item.precio_adjudicado ?? 0) || 0;
+        }
+        // En presupuestos de cliente / firmados priorizar siempre `precio_adjudicado` (que ya incluye beneficio)
+        return parseFloat(item.precio_adjudicado ?? item['Precio Total (€)'] ?? 0) || 0;
+    };
+
+    const mapaTotalesHeaders = calcularTotalesCapitulos(todasPartidas, getPrecioUnitarioPartida);
+
     const filas = [];
-    let totalCalculado = 0;
+    let totalCosteCalculado = 0;
+    let totalPvpCalculado = 0;
 
     todasPartidas.forEach(p => {
         const tipo   = getFilaTipoPDF(p);
-        const cap    = (p.Capítulo || p.Capitulo || '').replace(/#+/g, '').trim();
+        const hKey   = p.Capítulo || p.Capitulo || '';
+        const cap    = hKey.replace(/#+/g, '').trim();
         const desc   = cleanDesc(p.Descripción || p.Descripcion || p.texto_partida || '').substring(0, 120);
-        const totalCap = parseFloat(p.precio_total_capitulo || 0);
+        const totalCapGuardado = parseFloat(p.precio_total_capitulo || 0);
+        const totalCapBase = totalCapGuardado > 0 ? totalCapGuardado : (mapaTotalesHeaders[hKey] || 0);
 
-        if (esModoDesglose) {
-            // ── MODO DESGLOSE: 6 columnas ──
-            const precio = parseFloat(p['Precio Total (€)'] || p.precio_adjudicado || 0);
-            const cant   = parseFloat(p.Cantidad || p.cantidad || 1);
-            const unidad = (p['Unidad IA'] || p.unidad || 'ud').trim();
-            const total  = precio * cant;
+        if (esBorrador) {
+            // ── MODO BORRADOR INTERNO: 7 columnas (muestra tanto Coste como Precio Total / PVP) ──
+            const costeUd = getPrecioUnitarioPartida(p);
+            const cant    = parseFloat(p.Cantidad || p.cantidad || 1);
+            const unidad  = (p['Unidad IA'] || p.unidad || 'ud').trim();
+            const costeLinea = costeUd * cant;
+            const pvpLinea   = aplicarBeneficio(costeLinea, beneficioPct);
 
-            if (tipo === 'capitulo') {
-                // Capítulo: 6 celdas explícitas — total acumulado en col 5 (Total €)
-                const totalCapStr = totalCap > 0
-                    ? totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €'
-                    : '';
-                const capS = { fontStyle: 'bold', fillColor: CAP_FILL, textColor: AZUL };
+            if (tipo === 'capitulo' || tipo === 'subcapitulo') {
+                const costeCap = mapaTotalesHeaders[hKey] || 0;
+                const pvpCap   = aplicarBeneficio(costeCap, beneficioPct);
+                const costeStr = costeCap.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                const pvpStr   = pvpCap.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                const st = tipo === 'capitulo'
+                    ? { fontStyle: 'bold', fillColor: CAP_FILL, textColor: AZUL }
+                    : { fontStyle: 'italic', fillColor: SUB_FILL, textColor: SUB_TEXT };
+                const bg = tipo === 'capitulo' ? CAP_FILL : SUB_FILL;
                 filas.push([
-                    { content: cap,        styles: capS },
-                    { content: desc,       styles: capS },
-                    { content: '',         styles: { fillColor: CAP_FILL } },
-                    { content: '',         styles: { fillColor: CAP_FILL } },
-                    { content: '',         styles: { fillColor: CAP_FILL } },
-                    { content: totalCapStr, styles: { ...capS, halign: 'right' } },
-                ]);
-            } else if (tipo === 'subcapitulo') {
-                // Subcapítulo: mismo patrón con estilo itálico azul medio
-                const totalSubStr = totalCap > 0
-                    ? totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €'
-                    : '';
-                const subS = { fontStyle: 'italic', fillColor: SUB_FILL, textColor: SUB_TEXT };
-                filas.push([
-                    { content: cap,        styles: subS },
-                    { content: desc,       styles: subS },
-                    { content: '',         styles: { fillColor: SUB_FILL } },
-                    { content: '',         styles: { fillColor: SUB_FILL } },
-                    { content: '',         styles: { fillColor: SUB_FILL } },
-                    { content: totalSubStr, styles: { ...subS, halign: 'right' } },
+                    { content: cap,      styles: st },
+                    { content: desc,     styles: st },
+                    { content: '',       styles: { fillColor: bg } },
+                    { content: '',       styles: { fillColor: bg } },
+                    { content: '',       styles: { fillColor: bg } },
+                    { content: costeStr, styles: { ...st, halign: 'right' } },
+                    { content: pvpStr,   styles: { ...st, halign: 'right' } },
                 ]);
             } else {
-                totalCalculado += total;
+                totalCosteCalculado += costeLinea;
+                totalPvpCalculado   += pvpLinea;
                 filas.push([
                     { content: cap, styles: { halign: 'center' } },
                     desc,
                     { content: cant.toLocaleString('es-ES', { maximumFractionDigits: 2 }), styles: { halign: 'center' } },
                     { content: unidad, styles: { halign: 'center' } },
-                    { content: precio.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: precio > 0 ? 'normal' : 'italic', textColor: precio > 0 ? GRIS_TEXTO : GRIS_MUTED } },
-                    { content: total.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: total > 0 ? AZUL : GRIS_MUTED } },
+                    { content: costeUd.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: costeUd > 0 ? 'normal' : 'italic', textColor: costeUd > 0 ? GRIS_TEXTO : GRIS_MUTED } },
+                    { content: costeLinea.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: costeLinea > 0 ? AZUL : GRIS_MUTED } },
+                    { content: pvpLinea.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: pvpLinea > 0 ? VERDE : GRIS_MUTED } },
                 ]);
-                // Comentario del jefe de obra: fila-nota que ocupa todo el ancho
+            }
+        } else if (esModoDesglose) {
+            // ── MODO CLIENTE DESGLOSE: 6 columnas (muestra el PVP / precio con beneficio) ──
+            const precio = getPrecioUnitarioPartida(p);
+            const cant   = parseFloat(p.Cantidad || p.cantidad || 1);
+            const unidad = (p['Unidad IA'] || p.unidad || 'ud').trim();
+            const total  = precio * cant;
+
+            if (tipo === 'capitulo') {
+                const totalCapStr = totalCapBase.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                const capS = { fontStyle: 'bold', fillColor: CAP_FILL, textColor: AZUL };
+                filas.push([
+                    { content: cap,         styles: capS },
+                    { content: desc,        styles: capS },
+                    { content: '',          styles: { fillColor: CAP_FILL } },
+                    { content: '',          styles: { fillColor: CAP_FILL } },
+                    { content: '',          styles: { fillColor: CAP_FILL } },
+                    { content: totalCapStr, styles: { ...capS, halign: 'right' } },
+                ]);
+            } else if (tipo === 'subcapitulo') {
+                const totalSubStr = totalCapBase.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                const subS = { fontStyle: 'italic', fillColor: SUB_FILL, textColor: SUB_TEXT };
+                filas.push([
+                    { content: cap,         styles: subS },
+                    { content: desc,        styles: subS },
+                    { content: '',          styles: { fillColor: SUB_FILL } },
+                    { content: '',          styles: { fillColor: SUB_FILL } },
+                    { content: '',          styles: { fillColor: SUB_FILL } },
+                    { content: totalSubStr, styles: { ...subS, halign: 'right' } },
+                ]);
+            } else {
+                totalPvpCalculado += total;
+                filas.push([
+                    { content: cap, styles: { halign: 'center' } },
+                    desc,
+                    { content: cant.toLocaleString('es-ES', { maximumFractionDigits: 2 }), styles: { halign: 'center' } },
+                    { content: unidad, styles: { halign: 'center' } },
+                    { content: precio.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: precio > 0 ? 'normal' : 'italic', textColor: precio > 0 ? GRIS_TEXTO : GRIS_MUTED } },
+                    { content: total.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: total > 0 ? AZUL : GRIS_MUTED } },
+                ]);
                 const comentario = (p.comentario || '').trim();
                 if (comentario) {
                     filas.push([
@@ -188,8 +228,8 @@ export function generarPresupuestoPDF(data) {
                 }
             }
         } else {
-            // ── MODO CAPS/SUBCAPS: 2 columnas (Descripción | Total) ──
-            const totalStr = totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €';
+            // ── MODO CLIENTE RESUMEN (CAPS/SUBCAPS): 2 columnas (Descripción | Total PVP) ──
+            const totalStr = totalCapBase.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
             if (tipo === 'capitulo') {
                 filas.push([
                     { content: desc, styles: { fontStyle: 'bold', fillColor: CAP_FILL, textColor: AZUL, fontSize: 9 } },
@@ -204,7 +244,26 @@ export function generarPresupuestoPDF(data) {
         }
     });
 
-    if (esModoDesglose) {
+    if (esBorrador) {
+        autoTable(doc, {
+            startY: 75,
+            head: [['Cap.', 'Descripción', 'Cant.', 'Ud.', 'Coste/ud (€)', 'Coste (€)', 'PVP (€)']],
+            body: filas,
+            theme: 'plain',
+            headStyles: { fillColor: AZUL, textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5, cellPadding: 3.5 },
+            bodyStyles: { fontSize: 8, cellPadding: 2.8, lineWidth: 0.1, lineColor: [220, 224, 235] },
+            alternateRowStyles: { fillColor: GRIS_FILA },
+            columnStyles: {
+                0: { cellWidth: 13, halign: 'center' },
+                2: { cellWidth: 14, halign: 'center' },
+                3: { cellWidth: 11, halign: 'center' },
+                4: { cellWidth: 23, halign: 'right' },
+                5: { cellWidth: 24, halign: 'right' },
+                6: { cellWidth: 25, halign: 'right' },
+            },
+            margin: { left: 14, right: 14 },
+        });
+    } else if (esModoDesglose) {
         autoTable(doc, {
             startY: 75,
             head: [['Cap.', 'Descripción', 'Cant.', 'Ud.', 'Precio/ud (€)', 'Total (€)']],
@@ -240,25 +299,59 @@ export function generarPresupuestoPDF(data) {
 
     // ── 4. TOTAL ───────────────────────────────────────────────────────────────
     const tableEnd = (doc.lastAutoTable?.finalY || 80) + 8;
-    const totalFinal = totalCalculado > 0 ? totalCalculado : parseFloat(precio_total || 0);
-    const totalStr = totalFinal.toLocaleString('es-ES', { minimumFractionDigits: 2 }) + ' €';
+    let nextY = tableEnd + 28;
 
-    doc.setFillColor(...AZUL_LIGHT);
-    doc.roundedRect(W - 90, tableEnd - 2, 76, 18, 3, 3, 'F');
-    doc.setDrawColor(...AZUL);
-    doc.setLineWidth(0.5);
-    doc.roundedRect(W - 90, tableEnd - 2, 76, 18, 3, 3, 'S');
+    if (esBorrador) {
+        const costeTotalFinal = totalCosteCalculado > 0 ? totalCosteCalculado : parseFloat(precio_total || 0);
+        const pvpTotalFinal = aplicarBeneficio(costeTotalFinal, beneficioPct);
+        const costeStr = costeTotalFinal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+        const pvpStr = pvpTotalFinal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(...AZUL);
-    doc.text('TOTAL PRESUPUESTO', W - 87, tableEnd + 5);
+        doc.setFillColor(...AZUL_LIGHT);
+        doc.roundedRect(W - 102, tableEnd - 2, 88, 26, 3, 3, 'F');
+        doc.setDrawColor(...AZUL);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(W - 102, tableEnd - 2, 88, 26, 3, 3, 'S');
 
-    doc.setFontSize(14);
-    doc.text(totalStr, W - 16, tableEnd + 13, { align: 'right' });
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...GRIS_TEXTO);
+        doc.text('COSTE TOTAL:', W - 98, tableEnd + 5);
+        doc.text(costeStr, W - 17, tableEnd + 5, { align: 'right' });
+
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(...GRIS_MUTED);
+        doc.text(`Beneficio aplicado (${beneficioPct}%):`, W - 98, tableEnd + 11);
+        doc.text((pvpTotalFinal - costeTotalFinal).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', W - 17, tableEnd + 11, { align: 'right' });
+
+        doc.setFontSize(9.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...AZUL);
+        doc.text('TOTAL PVP:', W - 98, tableEnd + 19);
+        doc.setFontSize(13);
+        doc.text(pvpStr, W - 17, tableEnd + 19, { align: 'right' });
+        nextY = tableEnd + 34;
+    } else {
+        const totalFinal = parseFloat(precio_total || 0) > 0 ? parseFloat(precio_total) : totalPvpCalculado;
+        const totalStr = totalFinal.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+
+        doc.setFillColor(...AZUL_LIGHT);
+        doc.roundedRect(W - 90, tableEnd - 2, 76, 18, 3, 3, 'F');
+        doc.setDrawColor(...AZUL);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(W - 90, tableEnd - 2, 76, 18, 3, 3, 'S');
+
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(...AZUL);
+        doc.text('TOTAL PRESUPUESTO', W - 87, tableEnd + 5);
+
+        doc.setFontSize(14);
+        doc.text(totalStr, W - 16, tableEnd + 13, { align: 'right' });
+    }
 
     // ── 5. SECCIÓN DE FIRMA (solo si existe) ───────────────────────────────────
-    let nextY = tableEnd + 28;
 
     if (firma_base64) {
         const fechaFirmaStr = (() => {

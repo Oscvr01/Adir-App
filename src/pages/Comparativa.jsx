@@ -12,6 +12,7 @@ import Bc3Worker from '../utils/bc3Worker.js?worker';
 import { generarPDFOfertaProveedor, descargarPDF } from '../utils/pdfUtils';
 import { cleanText } from '../utils/escape';
 import { formatDecimal, parseDecimal } from '../utils/format';
+import { filtrarPartidasHojaBD } from '../utils/partidas';
 
 // ─── Vista: FEED GLOBAL de respuestas recibidas ──────────────────────────────
 function FeedPresupuestos({ solicitudes, respuestas, partidas, propuestas, proyectoSel, oficioSel, deleteSolicitud, allPartidas }) {
@@ -691,12 +692,10 @@ export default function Comparativa({ setSessionCache }) {
     try {
       if (!proyectoSel) return {};
 
-      // Todas las partidas del proyecto (excluir cabeceras de capítulo)
-      const lineasPartidas = allPartidas.filter(p => {
-        if (p.propuesta_id !== proyectoSel) return false;
-        const cod = p.codigo || (p.texto_partida ? p.texto_partida.split('::')[0] : '') || '';
-        return !cod.trim().endsWith('#'); // excluir capítulos/subcapítulos
-      });
+      // Todas las partidas hoja del proyecto (conserva subcapítulos '#' sin hijos que tienen precio/unidad)
+      const lineasPartidas = filtrarPartidasHojaBD(
+        allPartidas.filter(p => p.propuesta_id === proyectoSel)
+      );
 
       if (!lineasPartidas.length) return {};
 

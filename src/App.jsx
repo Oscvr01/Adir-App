@@ -74,23 +74,31 @@ const PerfilModal = ({ user, onClose, onSaved }) => {
   );
 };
 
-import NuevoProyecto from './pages/NuevoProyecto';
-import Borradores from './pages/Borradores';
-import BandejaEntrada from './pages/BandejaEntrada';
-import Proveedores from './pages/Proveedores';
-import Ajustes from './pages/Ajustes';
-import Portal from './pages/Portal';
-import PresupuestoCliente from './pages/PresupuestoCliente';
-import Comparativa from './pages/Comparativa';
-import JefesObra from './pages/JefesObra';
-import Proyectos from './pages/Proyectos';
-import BasePrecios from './pages/BasePrecios';
-import Historial from './pages/Historial';
-import PresupuestosFirmados from './pages/PresupuestosFirmados';
-import Dashboard from './pages/Dashboard';
-import Clientes from './pages/Clientes';
 import Login from './pages/Login';
-import Usuarios from './pages/Usuarios';
+
+const NuevoProyecto = React.lazy(() => import('./pages/NuevoProyecto'));
+const Borradores = React.lazy(() => import('./pages/Borradores'));
+const BandejaEntrada = React.lazy(() => import('./pages/BandejaEntrada'));
+const Proveedores = React.lazy(() => import('./pages/Proveedores'));
+const Ajustes = React.lazy(() => import('./pages/Ajustes'));
+const Portal = React.lazy(() => import('./pages/Portal'));
+const PresupuestoCliente = React.lazy(() => import('./pages/PresupuestoCliente'));
+const Comparativa = React.lazy(() => import('./pages/Comparativa'));
+const JefesObra = React.lazy(() => import('./pages/JefesObra'));
+const Proyectos = React.lazy(() => import('./pages/Proyectos'));
+const BasePrecios = React.lazy(() => import('./pages/BasePrecios'));
+const Historial = React.lazy(() => import('./pages/Historial'));
+const PresupuestosFirmados = React.lazy(() => import('./pages/PresupuestosFirmados'));
+const Dashboard = React.lazy(() => import('./pages/Dashboard'));
+const Clientes = React.lazy(() => import('./pages/Clientes'));
+const Usuarios = React.lazy(() => import('./pages/Usuarios'));
+
+const PageLoader = () => (
+  <div style={{ minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#64748b' }}>
+    <Loader2 size={22} className="loader-spinner" />
+    <span>Cargando...</span>
+  </div>
+);
 
 import logoAdir from './assets/adirblanco-header.webp';
 
@@ -246,10 +254,12 @@ const AppContent = () => {
   // Portal routes (sin autenticación requerida)
   if (isPortalPath) {
     return (
-      <Routes>
-        <Route path="/portal" element={<Portal />} />
-        <Route path="/presupuesto-cliente" element={<PresupuestoCliente />} />
-      </Routes>
+      <React.Suspense fallback={<PageLoader />}>
+        <Routes>
+          <Route path="/portal" element={<Portal />} />
+          <Route path="/presupuesto-cliente" element={<PresupuestoCliente />} />
+        </Routes>
+      </React.Suspense>
     );
   }
 
@@ -290,24 +300,26 @@ const AppContent = () => {
           }}
         />
       )}
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/nuevo" element={<NuevoProyecto />} />
-          <Route path="/borradores" element={<Borradores sessionCache={sessionCache} setSessionCache={setSessionCache} />} />
-          <Route path="/bandeja" element={<BandejaEntrada />} />
-          {(user.tipo_usuario === 1 || user.tipo_usuario === 3) && <Route path="/jefes-obra" element={<JefesObra />} />}
-          <Route path="/proyectos" element={<Proyectos />} />
-          <Route path="/clientes" element={<Clientes />} />
-          <Route path="/proveedores" element={<Proveedores />} />
-          <Route path="/comparativa" element={<Comparativa sessionCache={sessionCache} setSessionCache={setSessionCache} />} />
-          <Route path="/base-precios" element={<BasePrecios />} />
-          <Route path="/historial" element={<Historial />} />
-          <Route path="/presupuestos-firmados" element={<PresupuestosFirmados />} />
-          {(user.tipo_usuario === 1 || user.tipo_usuario === 2) && <Route path="/usuarios" element={<Usuarios />} />}
-          <Route path="/ajustes" element={<Ajustes />} />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
+        <React.Suspense fallback={<PageLoader />}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/nuevo" element={<NuevoProyecto />} />
+            <Route path="/borradores" element={<Borradores sessionCache={sessionCache} setSessionCache={setSessionCache} />} />
+            <Route path="/bandeja" element={<BandejaEntrada />} />
+            {(user.tipo_usuario === 1 || user.tipo_usuario === 3) && <Route path="/jefes-obra" element={<JefesObra />} />}
+            <Route path="/proyectos" element={<Proyectos />} />
+            <Route path="/clientes" element={<Clientes />} />
+            <Route path="/proveedores" element={<Proveedores />} />
+            <Route path="/comparativa" element={<Comparativa sessionCache={sessionCache} setSessionCache={setSessionCache} />} />
+            <Route path="/base-precios" element={<BasePrecios />} />
+            <Route path="/historial" element={<Historial />} />
+            <Route path="/presupuestos-firmados" element={<PresupuestosFirmados />} />
+            {(user.tipo_usuario === 1 || user.tipo_usuario === 2) && <Route path="/usuarios" element={<Usuarios />} />}
+            <Route path="/ajustes" element={<Ajustes />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </React.Suspense>
       </main>
     </div>
   );

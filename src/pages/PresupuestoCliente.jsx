@@ -6,6 +6,7 @@ import { useModal } from '../utils/useModal';
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
 import { Download, PenLine, CheckCircle, X, Loader2 } from 'lucide-react';
 import { cleanText } from '../utils/escape';
+import { getTipoFila, calcularTotalesCapitulos } from '../utils/partidas';
 
 const PresupuestoCliente = () => {
     const location = useLocation();
@@ -290,14 +291,15 @@ const PresupuestoCliente = () => {
     });
     const total = parseFloat(presupuesto.precio_total || 0);
 
-    // Helper para clasificar fila (sincronizado con JefesObra)
-    const getTipoFila = (p) => {
-        const cap = (p.Capítulo || p.Capitulo || '').trim();
-        if (!cap.endsWith('#')) return 'partida';
-        const limpio = cap.replace(/#$/, '');
-        if (limpio === '99_EXTRAS') return 'capitulo';
-        if (limpio.includes('.')) return 'subcapitulo';
-        return 'capitulo';
+    const mapaTotalesHeaders = calcularTotalesCapitulos(
+        todasPartidas,
+        (item) => parseFloat(item.precio_adjudicado ?? item['Precio Total (€)'] ?? 0) || 0
+    );
+    const obtenerTotalCategoria = (headerRow) => {
+        const guardado = parseFloat(headerRow.precio_total_capitulo || 0);
+        if (guardado > 0) return guardado;
+        const hRaw = (headerRow.Capítulo || headerRow.Capitulo || '').trim();
+        return mapaTotalesHeaders[hRaw] || 0;
     };
 
     return (
@@ -358,7 +360,7 @@ const PresupuestoCliente = () => {
                                 {todasPartidas.map((p, idx) => {
                                     const tipo = getTipoFila(p);
                                     const desc = cleanText(p.Descripción || p.Descripcion || p.texto_partida || '-');
-                                    const totalCap = parseFloat(p.precio_total_capitulo || 0);
+                                    const totalCap = (tipo === 'capitulo' || tipo === 'subcapitulo') ? obtenerTotalCategoria(p) : 0;
 
                                     // ── Capítulo principal ──
                                     if (tipo === 'capitulo') {
@@ -371,11 +373,9 @@ const PresupuestoCliente = () => {
                                                     backgroundColor: '#002D54', color: 'white',
                                                     textTransform: 'uppercase'
                                                 }}>
-                                                    {!esModoDesglose && (
-                                                        <span style={{ display: 'inline-block', float: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                                                            {totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                                        </span>
-                                                    )}
+                                                    <span style={{ display: 'inline-block', float: 'right', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                                        {totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                                    </span>
                                                     {desc}
                                                 </td>
                                             </tr>
@@ -393,11 +393,9 @@ const PresupuestoCliente = () => {
                                                     backgroundColor: '#1e3a8a', color: '#bfdbfe',
                                                     fontStyle: 'italic'
                                                 }}>
-                                                    {!esModoDesglose && (
-                                                        <span style={{ display: 'inline-block', float: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                                                            {totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                                        </span>
-                                                    )}
+                                                    <span style={{ display: 'inline-block', float: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                                                        {totalCap.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                                    </span>
                                                     {desc}
                                                 </td>
                                             </tr>
@@ -405,7 +403,7 @@ const PresupuestoCliente = () => {
                                     }
 
                                     // ── Partida individual (solo en modo desglose) ──
-                                    const precioUd = parseFloat(p['Precio Total (€)'] || p.precio_adjudicado || 0);
+                                    const precioUd = parseFloat(p.precio_adjudicado ?? p['Precio Total (€)'] ?? 0);
                                     const cant = parseFloat(p.Cantidad || p.cantidad || 1);
                                     const ud = (p['Unidad IA'] || p.unidad || 'ud').trim();
                                     const totalFila = precioUd * cant;
@@ -429,7 +427,7 @@ const PresupuestoCliente = () => {
                                                 {precioUd.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
                                             </td>
                                             <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600, color: '#002D54', whiteSpace: 'nowrap' }}>
-                                                {totalFila.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                                {totalFila.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
                                             </td>
                                         </tr>
                                     );
