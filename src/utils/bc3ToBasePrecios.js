@@ -1,6 +1,6 @@
 /**
  * bc3ToBasePrecios.js
- * Convierte un archivo BC3/FIEBDC-3 al formato de la tabla base_precios_adir.
+ * Convierte un archivo BC3/FIEBDC-3 al formato de la tabla de base de precios.
  * - Extrae MO/Materiales/Maquinaria de la descomposición (~D) si está disponible.
  * - Si no hay descomposición, estima el desglose según el tipo de trabajo.
  * - Detecta categorías a partir de la jerarquía de capítulos del BC3.
@@ -191,7 +191,7 @@ function tipoCodigo(cod) {
 
 /**
  * Parsea un texto BC3 y devuelve un array de objetos listos para
- * insertar/actualizar en la tabla `base_precios_adir`.
+ * insertar/actualizar en la base de precios.
  *
  * Cada objeto tiene:
  *   { codigo, categoria, descripcion_corta, unidad,

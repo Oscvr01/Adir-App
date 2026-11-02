@@ -116,7 +116,7 @@ export const parseBC3 = (text) => {
         // Un nodo es capítulo/subcapítulo solo si tiene hijos estructurales Y no tiene unidad propia
         const hasChildren = myChildren.length > 0 && !concepto.Unidad && !allResourceChildren;
 
-        const numCap    = hasChildren && !cod.endsWith('#') ? cod + '#' : cod;
+        const numCap    = hasChildren ? (cod.endsWith('#') ? cod : cod + '#') : cod.replace(/#+$/, '');
         const precioBase = concepto.precio || 0;
         const cant       = cantidad || 1;
 
