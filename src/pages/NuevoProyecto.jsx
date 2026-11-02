@@ -65,6 +65,8 @@ const NuevoProyecto = () => {
             try {
                 const text = e.target.result;
                 const allItems = parseBC3(text);
+                const coeficientePct = allItems.coeficientePct || 0;
+                const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
                 // Clasificación unificada con Borradores (getTipoFila por marca '#'),
                 // para que el conteo y el total coincidan exactamente con el borrador.
@@ -75,8 +77,8 @@ const NuevoProyecto = () => {
                     p => getTipoFila(p) === 'capitulo' && p.Capítulo.replace(/#$/, '') !== '99_EXTRAS'
                 );
 
-                // Total: misma fuente de verdad que Borradores (precio × cantidad de hojas)
-                const totalEstimado = calcularTotalPartidas(allItems);
+                // Total de coste directo base (precio × cantidad de hojas)
+                const totalCoste = round2(calcularTotalPartidas(allItems));
 
                 // Agrupar partidas bajo su capítulo raíz (sea directo o a través de subcapítulo)
                 // Recorremos en orden DFS: cuando vemos un 'capitulo' actualizamos currentCap
@@ -87,11 +89,18 @@ const NuevoProyecto = () => {
                     if (getTipoFila(p) === 'capitulo') {
                         const cod = p.Capítulo.replace(/#$/, '');
                         currentCapCod = cod;
-                        if (!capMap[cod]) capMap[cod] = { nombre: p.Descripción || cod, codigo: cod, count: 0, total: 0 };
+                        if (!capMap[cod]) {
+                            capMap[cod] = { nombre: p.Descripción || cod, codigo: cod, count: 0, totalCoste: 0, total: 0 };
+                        }
                     } else if (getTipoFila(p) === 'partida' && currentCapCod) {
-                        const precio = (Number(p['Precio Total (€)']) || 0) * (Number(p.Cantidad) || 1);
+                        const precioUnit = Number(p['Precio Total (€)']) || 0;
+                        const cant = Number(p.Cantidad) || 1;
+                        const impCoste = round2(precioUnit * cant);
+                        const precioPvpUnit = coeficientePct > 0 ? round2(precioUnit * (1 + coeficientePct / 100)) : precioUnit;
+                        const impPvp = round2(precioPvpUnit * cant);
                         capMap[currentCapCod].count++;
-                        capMap[currentCapCod].total += precio;
+                        capMap[currentCapCod].totalCoste = round2(capMap[currentCapCod].totalCoste + impCoste);
+                        capMap[currentCapCod].total = round2(capMap[currentCapCod].total + impPvp);
                     }
                     // subcapítulos: no hacen nada en la agrupación, sus partidas caen bajo currentCap
                 });
@@ -108,12 +117,18 @@ const NuevoProyecto = () => {
                     return 0;
                 });
 
+                const totalEstimado = coeficientePct > 0
+                    ? round2(capitulosOrdenados.reduce((acc, c) => acc + c.total, 0))
+                    : totalCoste;
+
                 setPreview({
                     partidas: soloPartidas.length,
                     capitulos: capitulosOrdenados.slice(0, 10),
                     totalCapitulos: soloCapitulos.length,
                     totalHierarchy: capitulosOrdenados.length,
-                    totalEstimado
+                    totalCoste,
+                    totalEstimado,
+                    coeficientePct
                 });
             } catch (err) {
                 console.error(err);
@@ -148,6 +163,7 @@ const NuevoProyecto = () => {
             try {
                 const text = e.target.result;
                 const allItems = parseBC3(text);
+                const coeficientePct = allItems.coeficientePct || 0;
                 const projectName = file.name.replace(/\.bc3$/i, '');
 
                 // ── Resolver cliente (existente o nuevo) ──────────────────────
@@ -177,7 +193,14 @@ const NuevoProyecto = () => {
                 }
                 const { error: propError } = await supabase
                     .from('propuestas')
-                    .insert([{ Proyecto: idUnico, cliente: clienteNombre, direccion: clienteEmail, estado: 'Borrador', fecha_recepcion: new Date().toISOString().split('T')[0] }]);
+                    .insert([{
+                        Proyecto: idUnico,
+                        cliente: clienteNombre,
+                        direccion: clienteEmail,
+                        estado: 'Borrador',
+                        fecha_recepcion: new Date().toISOString().split('T')[0],
+                        ...(coeficientePct > 0 ? { beneficio_pct: coeficientePct } : {})
+                    }]);
                 if (propError) throw new Error(propError.message || JSON.stringify(propError));
                 const propuestaId = idUnico;
                 await supabase.from('partidas').delete().eq('propuesta_id', propuestaId);
@@ -301,7 +324,16 @@ const NuevoProyecto = () => {
                             {[
                                 { icon: <Layers size={20} color="#6366f1" />, label: 'Capítulos', value: preview.totalCapitulos, bg: 'rgba(99,102,241,0.08)', color: '#6366f1' },
                                 { icon: <Hash size={20} color="var(--primary)" />, label: 'Partidas (hojas)', value: preview.partidas, bg: 'rgba(0,45,84,0.08)', color: 'var(--primary)' },
-                                { icon: <Euro size={20} color="#059669" />, label: 'Total Estimado', value: fmt(preview.totalEstimado), bg: 'rgba(5,150,105,0.08)', color: '#059669' },
+                                ...(preview.coeficientePct > 0
+                                    ? [{ icon: <Euro size={20} color="#475569" />, label: 'Total Coste Base', value: fmt(preview.totalCoste), bg: 'rgba(71,85,105,0.08)', color: '#475569' }]
+                                    : []),
+                                {
+                                    icon: <Euro size={20} color="#059669" />,
+                                    label: preview.coeficientePct > 0 ? `Total Presupuesto (+${preview.coeficientePct}% BC3)` : 'Total Estimado',
+                                    value: fmt(preview.totalEstimado),
+                                    bg: 'rgba(5,150,105,0.08)',
+                                    color: '#059669'
+                                },
                             ].map((stat, i) => (
                                 <div key={i} style={{ background: stat.bg, borderRadius: '12px', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
                                     <div style={{ background: 'white', borderRadius: '8px', padding: '8px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -316,7 +348,7 @@ const NuevoProyecto = () => {
                         </div>
                         <div style={{ background: 'var(--bg-secondary)', borderRadius: '10px', padding: '14px' }}>
                             <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '10px' }}>
-                                Distribución por capítulos
+                                Distribución por capítulos {preview.coeficientePct > 0 ? `(Importes con +${preview.coeficientePct}% de coeficiente Presto)` : ''}
                             </div>
                             {preview.capitulos.map((cap, i) => (
                                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
@@ -348,7 +380,12 @@ const NuevoProyecto = () => {
                                         <div style={{ height: '100%', width: `${Math.min(100, preview.totalEstimado > 0 ? (cap.total / preview.totalEstimado) * 100 : 0)}%`, background: 'var(--primary)', borderRadius: '2px' }} />
                                     </div>
                                     <span style={{ color: 'var(--text-light)', whiteSpace: 'nowrap', fontSize: '0.77rem', minWidth: '55px', textAlign: 'right' }}>{cap.count} part.</span>
-                                    <span style={{ fontWeight: 600, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.8rem', minWidth: '72px', textAlign: 'right' }}>{fmt(cap.total)}</span>
+                                    {preview.coeficientePct > 0 && (
+                                        <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap', fontSize: '0.75rem', minWidth: '80px', textAlign: 'right' }} title="Coste directo sin coeficiente">
+                                            ({fmt(cap.totalCoste)})
+                                        </span>
+                                    )}
+                                    <span style={{ fontWeight: 600, color: 'var(--primary)', whiteSpace: 'nowrap', fontSize: '0.8rem', minWidth: '82px', textAlign: 'right' }}>{fmt(cap.total)}</span>
                                 </div>
                             ))}
                             {preview.totalHierarchy > 10 && (
