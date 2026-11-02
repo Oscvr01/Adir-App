@@ -5,6 +5,16 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: './',
+  server: {
+    port: 5174,
+    proxy: {
+      '/api.php': {
+        target: 'https://adirgestion.app',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
   esbuild: {
     // Elimina console.* y debugger en el bundle de producción.
     // console.error y console.warn se conservan para diagnóstico real.
