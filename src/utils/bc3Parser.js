@@ -1,5 +1,5 @@
 /**
- * Resuelve un código referenciado en ~D o ~T contra el mapa de conceptos (~C),
+ * Resuelve un código referenciado en ~D, ~T o ~M contra el mapa de conceptos (~C),
  * tolerando diferencias en la presencia de almohadillas finales ('#' o '##').
  */
 export const resolveCod = (cod, conceptos) => {
@@ -15,13 +15,113 @@ export const resolveCod = (cod, conceptos) => {
 };
 
 /**
+ * Divide el contenido de un archivo BC3 en registros lógicos (~C, ~D, ~T, ~M, ~K, etc.),
+ * uniendo líneas de continuación que no empiezan por '~'.
+ */
+export const splitBC3Records = (text) => {
+    if (!text) return [];
+    const physicalLines = text.split(/\r?\n/);
+    const records = [];
+    let current = '';
+
+    for (const rawLine of physicalLines) {
+        const line = rawLine.trimEnd();
+        if (!line.trim()) continue;
+        if (line.startsWith('~')) {
+            if (current) records.push(current);
+            current = line;
+        } else if (current) {
+            // En registros ~T conservamos un espacio entre líneas de texto;
+            // en el resto de registros (~D, ~M, ~C) concatenamos directamente.
+            const sep = current.startsWith('~T|') ? ' ' : '';
+            current += sep + line.trim();
+        }
+    }
+    if (current) records.push(current);
+    return records;
+};
+
+/**
+ * Parsea un número opcional de FIEBDC-3 (devuelve null si está vacío).
+ */
+const parseOptionalNum = (val) => {
+    if (val === undefined || val === null) return null;
+    const s = String(val).trim().replace(',', '.');
+    if (s === '') return null;
+    const n = parseFloat(s);
+    return isNaN(n) ? null : n;
+};
+
+/**
+ * Parsea el campo DETALLE_LINEAS (parts[4]) de un registro ~M (Mediciones).
+ * Cada línea de medición en FIEBDC-3 consta de 6 subcampos separados por '\':
+ *   tipo \ comentario \ unidades \ longitud \ anchura \ altura
+ *
+ * Devuelve un array de líneas de desglose reales. Si el registro ~M solo contiene
+ * una línea trivial sin comentario ni dimensiones (solo repite el total en unidades),
+ * devuelve [] para no mostrar un desglose vacío.
+ */
+export const parseMedicionLineas = (rawDetalle) => {
+    if (!rawDetalle || typeof rawDetalle !== 'string') return [];
+    let clean = rawDetalle.trim();
+    if (!clean) return [];
+    if (clean.endsWith('\\')) clean = clean.slice(0, -1);
+
+    const tokens = clean.split('\\');
+    const lineas = [];
+
+    for (let i = 0; i < tokens.length; i += 6) {
+        const tipo = (tokens[i] || '').trim();
+        const comentario = (tokens[i + 1] || '').trim();
+        const uds = parseOptionalNum(tokens[i + 2]);
+        const largo = parseOptionalNum(tokens[i + 3]);
+        const ancho = parseOptionalNum(tokens[i + 4]);
+        const alto = parseOptionalNum(tokens[i + 5]);
+
+        const hasDims = uds !== null || largo !== null || ancho !== null || alto !== null;
+        if (!comentario && !hasDims) continue;
+
+        let parcial = null;
+        // En FIEBDC-3: tipo '1' o '2' son subtotales parcial/acumulado sin dimensiones propias
+        if (hasDims && tipo !== '1' && tipo !== '2') {
+            const prod = (uds ?? 1) * (largo ?? 1) * (ancho ?? 1) * (alto ?? 1);
+            parcial = Math.round((prod + Number.EPSILON) * 1000) / 1000;
+        }
+
+        lineas.push({
+            tipo,
+            comentario,
+            uds,
+            largo,
+            ancho,
+            alto,
+            parcial
+        });
+    }
+
+    // Si hay una única línea sin comentario ni dimensiones (largo/ancho/alto),
+    // es simplemente la cantidad total repetida y no constituye un desglose de medición.
+    if (
+        lineas.length === 1 &&
+        !lineas[0].comentario &&
+        lineas[0].largo === null &&
+        lineas[0].ancho === null &&
+        lineas[0].alto === null
+    ) {
+        return [];
+    }
+
+    return lineas;
+};
+
+/**
  * Extrae el porcentaje de coeficiente/beneficio del registro ~K de un archivo BC3.
  * Ejemplo: `~K|\2\2\3\2\2\2\2\EUR\|30|` -> devuelve 30.
  */
 export const extractBC3Coeficiente = (text) => {
     if (!text) return 0;
-    const lines = text.split(/\r?\n/);
-    for (const line of lines) {
+    const records = splitBC3Records(text);
+    for (const line of records) {
         if (!line.startsWith('~K|')) continue;
         const parts = line.split('|');
         const rawK = (parts[2] || '').trim();
@@ -36,18 +136,35 @@ export const extractBC3Coeficiente = (text) => {
 };
 
 /**
+ * Combina el Resumen (~C) y el TextoLargo (~T) de una partida hoja sin perder nunca
+ * el título corto de ~C.
+ */
+const buildPartidaDescripcion = (resumen, textoLargo) => {
+    const r = (resumen || '').trim();
+    const t = (textoLargo || '').trim();
+    if (r && t) {
+        if (t.toLowerCase().startsWith(r.toLowerCase())) {
+            return t;
+        }
+        return `${r} — ${t}`;
+    }
+    return r || t || '';
+};
+
+/**
  * Parser FIEBDC-3 (BC3) - Versión iterativa con detección de ciclos.
  * Reescrito para evitar stack overflows con archivos grandes o referencias circulares.
  */
 export const parseBC3 = (text) => {
-    const lines = (text || '').split(/\r?\n/);
+    const records = splitBC3Records(text);
     const conceptos = {};      // codigo -> { Capítulo, Unidad, Resumen, Descripción, TextoLargo, precio }
     const rawChildrenMap = {}; // padreRaw -> [{ cod, cantidad }]
     const rawTextos = [];      // [{ codigo, texto }]
+    const rawMediciones = [];  // [{ padreRaw, hijoRaw, total, lineas }]
     const coeficientePct = extractBC3Coeficiente(text);
 
     // ── Fase 1: Leer todos los registros ──────────────────────────────────────
-    for (const line of lines) {
+    for (const line of records) {
         if (!line.trim()) continue;
         const parts = line.split('|');
         const tag = parts[0];
@@ -88,10 +205,33 @@ export const parseBC3 = (text) => {
 
         } else if (tag === '~T') {
             const codigo = parts[1]?.trim();
-            const texto  = parts.slice(2).join(' ').replace(/\s{2,}/g, ' ').trim();
+            const texto  = parts.slice(2).join(' ').replace(/\|/g, ' ').replace(/\s{2,}/g, ' ').trim();
             if (codigo && texto) {
                 rawTextos.push({ codigo, texto });
             }
+
+        } else if (tag === '~M') {
+            const rel = (parts[1] || '').trim();
+            if (!rel) continue;
+            let padreRaw = '';
+            let hijoRaw = rel;
+            if (rel.includes('\\')) {
+                const relParts = rel.split('\\').filter(Boolean);
+                if (relParts.length >= 2) {
+                    padreRaw = relParts[0].trim();
+                    hijoRaw = relParts[relParts.length - 1].trim();
+                } else if (relParts.length === 1) {
+                    hijoRaw = relParts[0].trim();
+                }
+            }
+            const totalMed = parseOptionalNum(parts[3]);
+            const lineas = parseMedicionLineas(parts[4] || '');
+            rawMediciones.push({
+                padreRaw,
+                hijoRaw,
+                total: totalMed,
+                lineas
+            });
         }
     }
 
@@ -114,6 +254,20 @@ export const parseBC3 = (text) => {
         const resolved = resolveCod(codigo, conceptos);
         if (resolved && conceptos[resolved]) {
             conceptos[resolved].TextoLargo = texto;
+        }
+    }
+
+    const medicionesMap = {};
+    for (const m of rawMediciones) {
+        const resolvedPadre = m.padreRaw ? (resolveCod(m.padreRaw, conceptos) || m.padreRaw) : '';
+        const resolvedHijo = resolveCod(m.hijoRaw, conceptos) || m.hijoRaw;
+        const entry = { total: m.total, lineas: m.lineas };
+        if (resolvedPadre) {
+            medicionesMap[`${resolvedPadre}\\${resolvedHijo}`] = entry;
+        }
+        // Fallback por código de hijo si aún no tenía o si la entrada nueva tiene desglose
+        if (!medicionesMap[resolvedHijo] || (entry.lineas.length > 0 && medicionesMap[resolvedHijo].lineas.length === 0)) {
+            medicionesMap[resolvedHijo] = entry;
         }
     }
 
@@ -168,11 +322,11 @@ export const parseBC3 = (text) => {
 
     // ── Fase 3: DFS iterativo con detección de ciclos ─────────────────────────
     const filas  = [];
-    // Cada entrada del stack: { cod, cantidad, ancestros (Set de códigos padre), nivel }
+    // Cada entrada del stack: { cod, cantidad, ancestros, nivel, parentCod, parentHeaderCap }
     const stack = roots
         .slice()
         .reverse()
-        .map(cod => ({ cod, cantidad: 1, ancestros: new Set(), nivel: 0 }));
+        .map(cod => ({ cod, cantidad: 1, ancestros: new Set(), nivel: 0, parentCod: '', parentHeaderCap: '' }));
     const LIMITE = 20000; // límite de seguridad para no colgar el navegador
     let contador = 0;
 
@@ -182,7 +336,7 @@ export const parseBC3 = (text) => {
             break;
         }
 
-        const { cod, cantidad, ancestros, nivel } = stack.pop();
+        const { cod, cantidad, ancestros, nivel, parentCod, parentHeaderCap } = stack.pop();
 
         // Ciclo detectado: este código ya es un ancestro de sí mismo
         if (ancestros.has(cod)) continue;
@@ -214,29 +368,41 @@ export const parseBC3 = (text) => {
             }
         }
 
-        const cant = cantidad || 1;
+        // Buscar medición (~M) asociada a (parentCod \ cod) o al código
+        const medEntry = (!hasChildren && ((parentCod && medicionesMap[`${parentCod}\\${cod}`]) || medicionesMap[cod])) || null;
+        let cant = cantidad;
+        if ((!cant || cant === 0) && medEntry && medEntry.total !== null && medEntry.total > 0) {
+            cant = medEntry.total;
+        }
+        if (!cant) cant = 1;
 
         let tipoNivel = 'partida';
         if (hasChildren) {
             tipoNivel = (nivel === 0) ? 'capitulo' : 'subcapitulo';
         }
 
-        // Preservar el título corto (~C Resumen) en capítulos y subcapítulos;
-        // en partidas hoja priorizar el texto largo (~T) si existe.
+        // En capítulos y subcapítulos conservar el título corto (~C Resumen);
+        // en partidas hoja conservar el Resumen (~C) junto con el TextoLargo (~T).
         const descripcionFinal = hasChildren
             ? (concepto.Resumen || concepto.TextoLargo || '')
-            : (concepto.TextoLargo || concepto.Resumen || '');
+            : buildPartidaDescripcion(concepto.Resumen, concepto.TextoLargo);
 
-        filas.push({
+        const fila = {
             Capítulo:               numCap,
+            capitulo_codigo:        parentHeaderCap || '',
+            Resumen:                concepto.Resumen || '',
+            TextoLargo:             concepto.TextoLargo || '',
             Descripción:            descripcionFinal,
             Unidad:                 concepto.Unidad || '',
             Cantidad:               cant,
             'Precio Total (€)':     precioBase,
             'Precio Unitario base': precioBase,
             'Oficio Asignado':      'Sin asignar',
-            nivel:                  tipoNivel
-        });
+            nivel:                  tipoNivel,
+            mediciones:             medEntry?.lineas || []
+        };
+
+        filas.push(fila);
 
         if (hasChildren) {
             const nuevosAncestros = new Set(ancestros);
@@ -244,7 +410,14 @@ export const parseBC3 = (text) => {
             // Invertir para que salgan en el orden correcto al hacer pop()
             for (let i = myChildren.length - 1; i >= 0; i--) {
                 const child = myChildren[i];
-                stack.push({ cod: child.cod, cantidad: child.cantidad, ancestros: nuevosAncestros, nivel: nivel + 1 });
+                stack.push({
+                    cod: child.cod,
+                    cantidad: child.cantidad,
+                    ancestros: nuevosAncestros,
+                    nivel: nivel + 1,
+                    parentCod: cod,
+                    parentHeaderCap: numCap
+                });
             }
         }
     }

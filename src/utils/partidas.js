@@ -46,14 +46,37 @@ export function getTipoFila(p) {
 }
 
 /**
- * Determina si el código `itemCodeRaw` pertenece jerárquicamente al capítulo o
- * subcapítulo `headerCodeRaw`. Soporta tanto códigos con punto ("01.02.01" bajo "01.02")
- * como códigos con segundo punto omitido en Presto ("01.0211" bajo "01.02").
+ * Determina si el código o fila `itemOrCode` pertenece jerárquicamente al capítulo o
+ * subcapítulo `headerCodeRaw`.
+ * - Respeta `capitulo_codigo` explícito (del árbol ~D del BC3, ej. "03.03.03" bajo "03.02#").
+ * - Soporta códigos con punto ("01.02.01" bajo "01.02") y códigos con segundo punto
+ *   omitido en Presto ("01.0211" bajo "01.02").
  */
-export function perteneceACapitulo(itemCodeRaw, headerCodeRaw) {
+export function perteneceACapitulo(itemOrCode, headerCodeRaw, itemParentCodeRaw) {
+  const isObj = itemOrCode && typeof itemOrCode === 'object';
+  const itemCodeRaw = isObj ? (itemOrCode.Capítulo || itemOrCode.Capitulo || '') : itemOrCode;
+  const parentRaw = isObj
+    ? (itemOrCode.capitulo_codigo || itemOrCode.capitulo_padre || itemParentCodeRaw || '')
+    : (itemParentCodeRaw || '');
+
   const hCode = (headerCodeRaw || '').replace(/#+$/, '').trim();
   const iCode = (itemCodeRaw || '').replace(/#+$/, '').trim();
+  const pCode = (parentRaw || '').replace(/#+$/, '').trim();
   if (!hCode || !iCode || iCode === hCode) return false;
+
+  // 1. Si tiene capitulo_codigo explícito (del árbol ~D del BC3):
+  if (pCode) {
+    if (pCode === hCode) return true;
+    if (pCode.startsWith(hCode + '.')) return true;
+  }
+
+  // Si tiene un subcapítulo padre explícito distinto dentro del mismo capítulo,
+  // no asociarlo por error a otro subcapítulo:
+  if (pCode && hCode.includes('.') && pCode !== hCode && !pCode.startsWith(hCode + '.')) {
+    return false;
+  }
+
+  // 2. Comprobación por prefijo del código:
   if (iCode.startsWith(hCode + '.')) return true;
   if (
     hCode.includes('.') &&
@@ -63,6 +86,59 @@ export function perteneceACapitulo(itemCodeRaw, headerCodeRaw) {
     return true;
   }
   return false;
+}
+
+/**
+ * Infiere `capitulo_codigo` para partidas cargadas de proyectos antiguos en BD donde
+ * `capitulo_codigo` aún era null pero la partida fue emitida secuencialmente bajo un
+ * subcapítulo cuyo prefijo no coincide (ej. `03.03.03` bajo `03.02#` cuando `03.03#` no existe).
+ */
+export function inferirCapituloPadre(partidas) {
+  const lista = partidas || [];
+  const subcapsExistentes = new Set();
+  for (const p of lista) {
+    if (getTipoFila(p) === 'subcapitulo') {
+      subcapsExistentes.add((p.Capítulo || p.Capitulo || '').replace(/#+$/, '').trim());
+    }
+  }
+  if (subcapsExistentes.size === 0) return lista;
+
+  let currentCap = '';
+  let currentSubcap = '';
+  return lista.map((p) => {
+    const tipo = getTipoFila(p);
+    const raw = (p.Capítulo || p.Capitulo || '').replace(/#+$/, '').trim();
+    if (tipo === 'capitulo') {
+      currentCap = raw;
+      currentSubcap = '';
+      return p;
+    }
+    if (tipo === 'subcapitulo') {
+      currentSubcap = raw;
+      if (!currentCap) currentCap = raw.split('.')[0] || '';
+      return p;
+    }
+    if (p.capitulo_codigo || p.capitulo_padre) return p;
+
+    const normalized = formatCapitulo(raw).replace(/#+$/, '');
+    const parts = normalized.split('.');
+    // Criterio conservador: solo se infiere para códigos con 3 o más segmentos (NN.NN.NN),
+    // que son "nietos" huérfanos. Un código de 2 segmentos (NN.NN) es hijo directo del
+    // capítulo y nunca se reasigna al subcapítulo anterior.
+    if (parts.length >= 3 && currentSubcap) {
+      const rootPart = parts[0];
+      const subcapRoot = currentSubcap.split('.')[0];
+      const ownSubcapCandidate = `${parts[0]}.${parts[1]}`;
+      if (
+        rootPart === subcapRoot &&
+        ownSubcapCandidate !== currentSubcap &&
+        !subcapsExistentes.has(ownSubcapCandidate)
+      ) {
+        return { ...p, capitulo_codigo: currentSubcap + '#' };
+      }
+    }
+    return p;
+  });
 }
 
 /**
@@ -84,7 +160,7 @@ const defaultGetPrice = (item) => parseFloat(item['Precio Total (€)']) || 0;
  * Permite especificar un selector de precio unitario personalizado (`getPriceFn`).
  */
 export function calcularTotalesCapitulos(todasPartidas, getPriceFn = defaultGetPrice) {
-  const lista = todasPartidas || [];
+  const lista = inferirCapituloPadre(todasPartidas || []);
   const totales = {};
   const headers = lista.filter((p) => getTipoFila(p) !== 'partida');
   const items = lista.filter((p) => getTipoFila(p) === 'partida');
@@ -97,10 +173,9 @@ export function calcularTotalesCapitulos(todasPartidas, getPriceFn = defaultGetP
     const hIdx = isExtras ? indexMap.get(header) : -1;
 
     totales[hKey] = items.reduce((acc, item) => {
-      const iKey = item.Capítulo || item.Capitulo || '';
       const match = isExtras
         ? indexMap.get(item) > hIdx
-        : perteneceACapitulo(iKey, hKey);
+        : perteneceACapitulo(item, hKey);
       if (!match) return acc;
       const precio = parseFloat(getPriceFn(item)) || 0;
       const cant = parseFloat(item.Cantidad ?? item.cantidad ?? 1) || 1;
@@ -120,12 +195,22 @@ export function obtenerJerarquiaFila(p, subcapitulosValidos, enExtras = false) {
   if (tipo === 'capitulo') {
     return { capRoot: raw, subcapParent: null };
   }
+  const parentRaw = (p?.capitulo_codigo || p?.capitulo_padre || '').replace(/#+$/, '').trim();
   if (tipo === 'subcapitulo') {
-    const capRoot = raw.split('.')[0] || raw;
+    const capRoot = parentRaw ? (parentRaw.split('.')[0] || parentRaw) : (raw.split('.')[0] || raw);
     return { capRoot, subcapParent: raw };
   }
   if (enExtras) {
     return { capRoot: '99_EXTRAS', subcapParent: null };
+  }
+  if (parentRaw) {
+    const parentParts = parentRaw.split('.');
+    const capRoot = parentParts[0] || parentRaw;
+    const subcapParent =
+      parentParts.length >= 2 && (!subcapitulosValidos || subcapitulosValidos.has(parentRaw))
+        ? parentRaw
+        : null;
+    return { capRoot, subcapParent };
   }
   const normalized = formatCapitulo(raw).replace(/#+$/, '');
   const parts = normalized.split('.');
@@ -140,10 +225,20 @@ export function obtenerJerarquiaFila(p, subcapitulosValidos, enExtras = false) {
   return { capRoot, subcapParent };
 }
 
+// Obtiene la clave efectiva de ordenación jerárquica respetando capitulo_codigo si existe
+function getSortKey(p) {
+  const cap = formatCapitulo(p?.Capítulo || '');
+  const parent = (p?.capitulo_codigo || p?.capitulo_padre || '').replace(/#+$/, '').trim();
+  if (!parent || cap.endsWith('#')) return cap;
+  const capClean = cap.replace(/#+$/, '').trim();
+  if (capClean.startsWith(parent + '.')) return cap;
+  return `${parent}.${capClean}`;
+}
+
 // Comparador numérico para ordenar capítulos (01, 01.01, 01.02, 02, …)
 export function sortPartidasFn(a, b) {
-  const capA = formatCapitulo(a.Capítulo);
-  const capB = formatCapitulo(b.Capítulo);
+  const capA = getSortKey(a);
+  const capB = getSortKey(b);
   const isRootA = capA.endsWith('##');
   const isRootB = capB.endsWith('##');
   if (isRootA && !isRootB) return -1;
@@ -184,15 +279,17 @@ const EXTRAS_HEADER_BASE = {
  *        en partidas hoja reales quitando el '#' final para que sumen en su capítulo y sean editables.
  *      - Si están vacíos y sin precio, los descarta para evitar filas fantasma.
  *   3. Detecta partidas sueltas sin capítulo padre y las agrupa bajo "99_EXTRAS".
- *   4. Ordena por código de capítulo.
+ *   4. Ordena por código de capítulo (respetando capitulo_codigo cuando existe).
  */
 export function normalizarYOrdenarPartidas(mappedPartidas, extraFields = {}) {
-  const sinRaizNiExtrasVacio = (mappedPartidas || []).filter((p) => {
-    const cap = (p.Capítulo || '').trim();
-    if (esTituloRaiz(cap)) return false;
-    if (cap.replace(/#+$/, '') === '99_EXTRAS') return false;
-    return true;
-  });
+  const sinRaizNiExtrasVacio = inferirCapituloPadre(
+    (mappedPartidas || []).filter((p) => {
+      const cap = (p.Capítulo || '').trim();
+      if (esTituloRaiz(cap)) return false;
+      if (cap.replace(/#+$/, '') === '99_EXTRAS') return false;
+      return true;
+    })
+  );
 
   // Paso 2: Verificar qué filas con '#' tienen realmente descendientes en el proyecto
   const normalizadas = [];
@@ -201,7 +298,7 @@ export function normalizarYOrdenarPartidas(mappedPartidas, extraFields = {}) {
     if (cap.endsWith('#')) {
       const codLimpio = cap.replace(/#+$/, '');
       const tieneHijos = sinRaizNiExtrasVacio.some(
-        (other) => other !== p && perteneceACapitulo(other.Capítulo, cap)
+        (other) => other !== p && perteneceACapitulo(other, cap)
       );
 
       if (!tieneHijos) {
@@ -251,6 +348,11 @@ export function normalizarYOrdenarPartidas(mappedPartidas, extraFields = {}) {
   const esPartidaSuelta = (p) => {
     const cap = (p.Capítulo || '').trim();
     if (cap.endsWith('#')) return false;
+    const parentClean = (p.capitulo_codigo || p.capitulo_padre || '').replace(/#+$/, '').trim();
+    if (parentClean) {
+      const parentRoot = parentClean.split('.')[0];
+      if (capitulosValidos.has(parentClean) || capitulosValidos.has(parentRoot)) return false;
+    }
     const segmentos = formatCapitulo(cap).split('.');
     if (capitulosValidos.has(segmentos[0])) return false;
     return true;
@@ -286,6 +388,24 @@ export function filtrarPartidasHojaBD(partidasProyecto) {
 }
 
 /**
+ * Extrae el array de mediciones de una partida (ya sea en memoria `p.mediciones`
+ * o serializado en JSON dentro de la columna `descripcion` de BD).
+ */
+export function parseMedicionesGuardadas(p) {
+  if (!p) return [];
+  if (Array.isArray(p.mediciones)) return p.mediciones;
+  if (typeof p.descripcion === 'string' && p.descripcion.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(p.descripcion);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Ignorar si descripcion no es un JSON válido
+    }
+  }
+  return [];
+}
+
+/**
  * Mapea filas de la tabla `partidas` de BD al formato común de UI usado en
  * Borradores y Jefes de Obra. Permite inyectar campos específicos por vista
  * mediante `extraFieldsFn(row, finalPrice)`.
@@ -302,12 +422,14 @@ export function mapearPartidasDesdeBD(partidasData, extraFieldsFn) {
     const baseRow = {
       ...p,
       Capítulo: capCode,
+      capitulo_codigo: p.capitulo_codigo || p.capitulo_padre || '',
       Descripción: descClean,
       'Oficio Asignado': p.oficio_asignado || 'Sin asignar',
       'Precio Total (€)': finalPrice,
       Cantidad: p.cantidad !== undefined && p.cantidad !== null ? p.cantidad : 0,
       'Precio IA': p.precio_ia || 0,
       'Unidad IA': p.unidad || '',
+      mediciones: parseMedicionesGuardadas(p),
     };
 
     return typeof extraFieldsFn === 'function'

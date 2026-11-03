@@ -6,7 +6,26 @@ import { useModal } from '../utils/useModal';
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
 import { Download, PenLine, CheckCircle, X, Loader2 } from 'lucide-react';
 import { cleanText } from '../utils/escape';
-import { getTipoFila, calcularTotalesCapitulos } from '../utils/partidas';
+import { getTipoFila, calcularTotalesCapitulos, parseMedicionesGuardadas } from '../utils/partidas';
+
+const fmtMedNum = (v) =>
+    v === null || v === undefined || v === ''
+        ? '—'
+        : Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+
+const renderDescConResumen = (desc) => {
+    if (typeof desc !== 'string' || !desc.includes(' — ')) return desc;
+    const sepIdx = desc.indexOf(' — ');
+    const resumen = desc.slice(0, sepIdx);
+    const detalle = desc.slice(sepIdx + 3);
+    return (
+        <>
+            <strong style={{ color: '#002D54', fontWeight: 700 }}>{resumen}</strong>
+            {' — '}
+            <span>{detalle}</span>
+        </>
+    );
+};
 
 const PresupuestoCliente = () => {
     const location = useLocation();
@@ -23,6 +42,7 @@ const PresupuestoCliente = () => {
     const [rejectReason, setRejectReason] = useState('');
     const [firmaData, setFirmaData] = useState(null);
     const [fechaFirma, setFechaFirma] = useState(null);
+    const [expandedMediciones, setExpandedMediciones] = useState(() => new Set());
 
     const canvasRef = useRef(null);
     const lastPos = useRef({ x: 0, y: 0 });
@@ -302,6 +322,35 @@ const PresupuestoCliente = () => {
         return mapaTotalesHeaders[hRaw] || 0;
     };
 
+    const indicesConMedicion = [];
+    if (esModoDesglose) {
+        todasPartidas.forEach((p, idx) => {
+            if (getTipoFila(p) === 'partida' && parseMedicionesGuardadas(p).length > 0) {
+                indicesConMedicion.push(idx);
+            }
+        });
+    }
+    const allMedicionesExpanded =
+        indicesConMedicion.length > 0 &&
+        indicesConMedicion.every((idx) => expandedMediciones.has(idx));
+
+    const toggleMedicion = (idx) => {
+        setExpandedMediciones((prev) => {
+            const next = new Set(prev);
+            if (next.has(idx)) next.delete(idx);
+            else next.add(idx);
+            return next;
+        });
+    };
+
+    const handleToggleAllMediciones = () => {
+        if (allMedicionesExpanded) {
+            setExpandedMediciones(new Set());
+        } else {
+            setExpandedMediciones(new Set(indicesConMedicion));
+        }
+    };
+
     return (
         <div style={styles.page}>
             {ModalUI}
@@ -333,9 +382,24 @@ const PresupuestoCliente = () => {
 
                 {/* Tabla presupuesto — modo dinámico según datos guardados */}
                 <div style={styles.card}>
-                    <h3 style={styles.sectionTitle}>
-                        {esModoDesglose ? 'Desglose Detallado del Presupuesto' : 'Resumen del Presupuesto'}
-                    </h3>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+                        <h3 style={{ ...styles.sectionTitle, margin: 0 }}>
+                            {esModoDesglose ? 'Desglose Detallado del Presupuesto' : 'Resumen del Presupuesto'}
+                        </h3>
+                        {indicesConMedicion.length > 0 && (
+                            <button
+                                type="button"
+                                className={`pt-btn-collapse-all ${allMedicionesExpanded ? 'pt-btn-medicion-global-active' : ''}`}
+                                onClick={handleToggleAllMediciones}
+                                title="Muestra u oculta todas las mediciones de las partidas"
+                            >
+                                <span className="pt-badge-p-inline">P</span>
+                                {allMedicionesExpanded
+                                    ? `Ocultar mediciones (${indicesConMedicion.length})`
+                                    : `Mostrar mediciones (${indicesConMedicion.length})`}
+                            </button>
+                        )}
+                    </div>
                     <div style={{ overflowX: 'auto' }}>
                         <table style={styles.table}>
                             <thead>
@@ -408,28 +472,97 @@ const PresupuestoCliente = () => {
                                     const ud = (p['Unidad IA'] || p.unidad || 'ud').trim();
                                     const totalFila = precioUd * cant;
                                     const bgColor = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+                                    const mediciones = parseMedicionesGuardadas(p);
+                                    const tieneMedicion = mediciones.length > 0;
+                                    const isMedicionOpen = tieneMedicion && expandedMediciones.has(idx);
+                                    const capClean = (p.Capítulo || p.Capitulo || '').replace(/#+/g, '');
 
                                     return (
-                                        <tr key={idx} style={{ backgroundColor: bgColor }}>
-                                            <td style={{ ...styles.td, paddingLeft: 32, color: '#334155' }}>
-                                                {desc}
-                                                {(p.comentario && p.comentario.trim()) && (
-                                                    <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#64748b', marginTop: 4 }}>
-                                                        {p.comentario.trim()}
+                                        <React.Fragment key={idx}>
+                                            <tr style={{ backgroundColor: bgColor }}>
+                                                <td style={{ ...styles.td, paddingLeft: 32, color: '#334155' }}>
+                                                    {renderDescConResumen(desc)}
+                                                    {(p.comentario && p.comentario.trim()) && (
+                                                        <div style={{ fontSize: '0.78rem', fontStyle: 'italic', color: '#64748b', marginTop: 4 }}>
+                                                            {p.comentario.trim()}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td style={{ ...styles.td, textAlign: 'center', color: '#64748b', whiteSpace: 'nowrap' }}>
+                                                    {cant.toLocaleString('es-ES', { maximumFractionDigits: 2 })}
+                                                </td>
+                                                <td style={{ ...styles.td, textAlign: 'center', color: '#64748b' }}>
+                                                    <div className="pt-ud-stack">
+                                                        <span>{ud}</span>
+                                                        {tieneMedicion && (
+                                                            <button
+                                                                type="button"
+                                                                className={`pt-btn-medicion-p ${isMedicionOpen ? 'active' : ''}`}
+                                                                onClick={() => toggleMedicion(idx)}
+                                                                title={`${isMedicionOpen ? 'Ocultar' : 'Mostrar'} medición de presupuesto (${mediciones.length} ${mediciones.length === 1 ? 'línea' : 'líneas'})`}
+                                                            >
+                                                                P
+                                                            </button>
+                                                        )}
                                                     </div>
-                                                )}
-                                            </td>
-                                            <td style={{ ...styles.td, textAlign: 'center', color: '#64748b', whiteSpace: 'nowrap' }}>
-                                                {cant.toLocaleString('es-ES', { maximumFractionDigits: 2 })}
-                                            </td>
-                                            <td style={{ ...styles.td, textAlign: 'center', color: '#64748b' }}>{ud}</td>
-                                            <td style={{ ...styles.td, textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
-                                                {precioUd.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
-                                            </td>
-                                            <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600, color: '#002D54', whiteSpace: 'nowrap' }}>
-                                                {totalFila.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
-                                            </td>
-                                        </tr>
+                                                </td>
+                                                <td style={{ ...styles.td, textAlign: 'right', color: '#64748b', whiteSpace: 'nowrap' }}>
+                                                    {precioUd.toLocaleString('es-ES', { minimumFractionDigits: 2 })} €
+                                                </td>
+                                                <td style={{ ...styles.td, textAlign: 'right', fontWeight: 600, color: '#002D54', whiteSpace: 'nowrap' }}>
+                                                    {totalFila.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €
+                                                </td>
+                                            </tr>
+                                            {isMedicionOpen && (
+                                                <tr className="pt-row-medicion">
+                                                    <td colSpan={5}>
+                                                        <div className="pt-medicion-box">
+                                                            <div className="pt-medicion-header">
+                                                                <span>
+                                                                    Desglose de medición {capClean ? `— Partida ${capClean} ` : ''}({mediciones.length}{' '}
+                                                                    {mediciones.length === 1 ? 'línea' : 'líneas'})
+                                                                </span>
+                                                                <span>
+                                                                    Total: {fmtMedNum(cant)} {ud}
+                                                                </span>
+                                                            </div>
+                                                            <table className="pt-medicion-table">
+                                                                <thead>
+                                                                    <tr>
+                                                                        <th style={{ textAlign: 'left' }}>Comentario / Descripción</th>
+                                                                        <th style={{ textAlign: 'right', width: 75 }}>Uds.</th>
+                                                                        <th style={{ textAlign: 'right', width: 85 }}>Longitud</th>
+                                                                        <th style={{ textAlign: 'right', width: 85 }}>Anchura</th>
+                                                                        <th style={{ textAlign: 'right', width: 85 }}>Altura</th>
+                                                                        <th style={{ textAlign: 'right', width: 95 }}>Parcial</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {mediciones.map((m, mIdx) => (
+                                                                        <tr key={mIdx}>
+                                                                            <td style={{ textAlign: 'left' }}>{m.comentario || '—'}</td>
+                                                                            <td style={{ textAlign: 'right' }}>{fmtMedNum(m.uds)}</td>
+                                                                            <td style={{ textAlign: 'right' }}>{fmtMedNum(m.largo)}</td>
+                                                                            <td style={{ textAlign: 'right' }}>{fmtMedNum(m.ancho)}</td>
+                                                                            <td style={{ textAlign: 'right' }}>{fmtMedNum(m.alto)}</td>
+                                                                            <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmtMedNum(m.parcial)}</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                                <tfoot>
+                                                                    <tr>
+                                                                        <td colSpan={5} style={{ textAlign: 'right' }}>
+                                                                            Total medición {ud ? `(${ud})` : ''}
+                                                                        </td>
+                                                                        <td style={{ textAlign: 'right' }}>{fmtMedNum(cant)}</td>
+                                                                    </tr>
+                                                                </tfoot>
+                                                            </table>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
                                     );
                                 })}
                             </tbody>

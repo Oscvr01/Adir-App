@@ -346,13 +346,15 @@ const JefesObra = () => {
     // al congelar el snapshot que verá el cliente (precio_total_capitulo ya viene
     // con beneficio aplicado desde totalesCapitulos).
     const sanitizarPartidaParaBD = (p) => ({
-        Capítulo:            p.Capítulo || '',
-        Descripción:         p.Descripción || '',
-        Cantidad:            parseFloat(p.Cantidad) || 0,
-        'Unidad IA':         p['Unidad IA'] || p.unidad || '',
-        precio_adjudicado:   aplicarBeneficio(parseFloat(p['Precio Total (€)']) || 0, beneficioPct),
+        Capítulo:              p.Capítulo || '',
+        capitulo_codigo:       p.capitulo_codigo || '',
+        Descripción:           p.Descripción || '',
+        Cantidad:              parseFloat(p.Cantidad) || 0,
+        'Unidad IA':           p['Unidad IA'] || p.unidad || '',
+        precio_adjudicado:     aplicarBeneficio(parseFloat(p['Precio Total (€)']) || 0, beneficioPct),
         precio_total_capitulo: parseFloat(p.precio_total_capitulo) || 0,
-        comentario:          p.comentario || '',
+        comentario:            p.comentario || '',
+        ...(Array.isArray(p.mediciones) && p.mediciones.length > 0 ? { mediciones: p.mediciones } : {}),
     });
 
     // modoPortal: 'capitulos' | 'desglose' → qué datos se guardan en Supabase para el formulario de firma

@@ -835,3 +835,128 @@ tr:hover td {
   background-color: rgba(0, 45, 84, 0.1);
   color: var(--primary);
 }
+
+/* --- Desglose de Mediciones (Botón P y subtabla Presto) --- */
+.pt-ud-stack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.pt-btn-medicion-p {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 19px;
+  padding: 0 6px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  color: var(--primary);
+  background-color: #eef4fb;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.pt-btn-medicion-p:hover {
+  background-color: #dbeafe;
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.pt-btn-medicion-p.active {
+  color: #ffffff;
+  background-color: var(--primary);
+  border-color: var(--primary);
+  box-shadow: 0 1px 4px rgba(0, 45, 84, 0.25);
+}
+
+.pt-badge-p-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  border-radius: 3px;
+  background-color: var(--primary);
+  color: #ffffff;
+  line-height: 1;
+}
+
+.pt-btn-medicion-global-active {
+  background-color: var(--primary) !important;
+  color: #ffffff !important;
+  border-color: var(--primary) !important;
+}
+
+.pt-btn-medicion-global-active .pt-badge-p-inline {
+  background-color: #ffffff;
+  color: var(--primary);
+}
+
+.pt-row-medicion td {
+  background-color: #f8fafc !important;
+  padding: 8px 16px 12px 42px !important;
+  border-bottom: 2px solid #cbd5e1 !important;
+}
+
+.pt-medicion-box {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-left: 3px solid var(--primary);
+  border-radius: 6px;
+  overflow: hidden;
+  max-width: 760px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.pt-medicion-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background-color: #eef4fb;
+  border-bottom: 1px solid #cbd5e1;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.pt-medicion-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.pt-medicion-table th {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+  font-size: 0.7rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  padding: 5px 10px !important;
+  border-bottom: 1px solid #e2e8f0 !important;
+}
+
+.pt-medicion-table td {
+  background-color: #ffffff !important;
+  color: #334155 !important;
+  padding: 5px 10px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  font-size: 0.78rem !important;
+}
+
+.pt-medicion-table tfoot td {
+  background-color: #f8fafc !important;
+  font-weight: 700 !important;
+  color: var(--primary) !important;
+  border-top: 1px solid #cbd5e1 !important;
+  border-bottom: none !important;
+}

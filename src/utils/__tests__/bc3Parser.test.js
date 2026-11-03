@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseBC3, resolveCod, extractBC3Coeficiente } from '../bc3Parser';
-import { getTipoFila, calcularTotalPartidas } from '../partidas';
+import { parseBC3, resolveCod, extractBC3Coeficiente, parseMedicionLineas } from '../bc3Parser';
+import { getTipoFila, calcularTotalPartidas, calcularTotalesCapitulos } from '../partidas';
 
 describe('bc3Parser.js - Parser FIEBDC-3', () => {
   describe('resolveCod', () => {
@@ -275,6 +275,86 @@ describe('bc3Parser.js - Parser FIEBDC-3', () => {
       }, 0);
 
       expect(totalPvpPresto).toBe(58394.13);
+    });
+  });
+
+  describe('Lectura de mediciones (~M), Resumen + TextoLargo y relación padre-hijo (03.03.03 bajo 03.02#)', () => {
+    it('parsea líneas de medición reales (~M) e ignora líneas triviales que solo repiten el total', () => {
+      // Línea trivial: 1 sola línea sin comentario ni dimensiones (solo uds=1)
+      expect(parseMedicionLineas('\\\\1\\\\\\\\')).toEqual([]);
+      expect(parseMedicionLineas('')).toEqual([]);
+
+      // Desglose real de 01.05 (Demolición de tabiques: 22,15 m2)
+      const lineas0105 = parseMedicionLineas(
+        '\\Tabique vestibulo\\1\\1\\\\2.5\\\\Tabique vestidor\\1\\2.62\\\\2.5\\\\Tabique dormitorio\\1\\2.62\\\\2.5\\\\Tabique dormitorio 1\\1\\2.62\\\\2.5\\'
+      );
+      expect(lineas0105).toHaveLength(4);
+      expect(lineas0105[0]).toEqual({
+        tipo: '',
+        comentario: 'Tabique vestibulo',
+        uds: 1,
+        largo: 1,
+        ancho: null,
+        alto: 2.5,
+        parcial: 2.5,
+      });
+      expect(lineas0105[1]).toEqual({
+        tipo: '',
+        comentario: 'Tabique vestidor',
+        uds: 1,
+        largo: 2.62,
+        ancho: null,
+        alto: 2.5,
+        parcial: 6.55,
+      });
+    });
+
+    it('conserva Resumen + TextoLargo en partidas (ej. 03.03.03 Foseado techos), une ~T multilínea y agrupa 03.03.03 bajo 03.02#', () => {
+      const bc3 = [
+        '~K|\\2\\2\\3\\2\\2\\2\\2\\EUR\\|30|',
+        '~C|03#||PARTICIONES|7260.49|080726|0|',
+        '~D|03#|03.01\\1\\1\\03.02\\1\\1\\|',
+        '~C|03.01#|m2|Entramados autoportantes|2204.48|080726|0|',
+        '~D|03.01#|03.01.01\\1\\29.75\\|',
+        '~C|03.01.01|M2|Tabique de pladur|57|080726|0|',
+        '~T|03.01.01|Tabique de pladur en distribución interior de viviendas, formado por:',
+        '- Estructura metálica.',
+        '- Placa de yeso.|',
+        '~M|03.01#\\03.01.01|3\\1\\1\\|29.75|\\Dormitorios\\\\\\\\\\\\Atico\\\\\\\\\\|',
+        '~C|03.02#|m2|Falsos techos|5056.01|080726|0|',
+        '~D|03.02#|03.02.01\\1\\54.14\\03.02.02\\1\\14.29\\03.03.03\\1\\54.14\\|',
+        '~C|03.02.01|M2|Falso techo continuo de placas de yeso laminado|31|080726|0|',
+        '~T|03.02.01|Falso techo continuo suspendido, liso, situado a una altura menor de 4 m.|',
+        '~C|03.02.02|M2|Falso techo registrable de placas de yeso laminado|60|080726|0|',
+        '~C|03.03.03|m2|Foseado techos|25|080726|0|',
+        '~T|03.03.03|NOTA: Se medirá en obra los m2.|',
+        '~M|03.02#\\03.03.03|3\\2\\3\\|54.14||',
+      ].join('\n');
+
+      const items = parseBC3(bc3);
+      const p030101 = items.find((i) => i.Capítulo === '03.01.01');
+      const p030201 = items.find((i) => i.Capítulo === '03.02.01');
+      const p030303 = items.find((i) => i.Capítulo === '03.03.03');
+
+      // 1. ~T multilínea unido correctamente
+      expect(p030101.Descripción).toContain('- Estructura metálica.');
+      expect(p030101.Descripción).toContain('- Placa de yeso.');
+      expect(p030101.mediciones).toHaveLength(2);
+      expect(p030101.mediciones[0].comentario).toBe('Dormitorios');
+
+      // 2. Conserva el Resumen (~C) junto con el TextoLargo (~T) cuando son distintos
+      expect(p030201.Descripción).toBe(
+        'Falso techo continuo de placas de yeso laminado — Falso techo continuo suspendido, liso, situado a una altura menor de 4 m.'
+      );
+      expect(p030303.Descripción).toBe('Foseado techos — NOTA: Se medirá en obra los m2.');
+      expect(p030303.mediciones).toEqual([]);
+
+      // 3. Relación padre-hijo: 03.03.03 tiene capitulo_codigo = '03.02#' y suma en 03.02#
+      expect(p030303.capitulo_codigo).toBe('03.02#');
+      const totalesCoste = calcularTotalesCapitulos(items);
+      // 03.02# = 54.14*31 (1678.34) + 14.29*60 (857.40) + 54.14*25 (1353.50) = 3889.24 € coste -> *1.3 = 5056.01 € PVP
+      expect(totalesCoste['03.02#']).toBeCloseTo(3889.24, 2);
+      expect(Math.round(totalesCoste['03.02#'] * 1.3 * 100) / 100).toBe(5056.01);
     });
   });
 });

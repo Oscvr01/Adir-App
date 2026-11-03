@@ -12,6 +12,7 @@ import {
   filtrarPartidasHojaBD,
   mapearPartidasDesdeBD,
   actualizarCampoPartida,
+  inferirCapituloPadre,
 } from '../partidas';
 import { aplicarBeneficio, formatDecimal, parseDecimal, fmtEuro } from '../format';
 
@@ -89,6 +90,41 @@ describe('perteneceACapitulo', () => {
     expect(perteneceACapitulo('010.01', '01#')).toBe(false);
     expect(perteneceACapitulo('01.02#', '01.02#')).toBe(false);
     expect(perteneceACapitulo('01#', '01#')).toBe(false);
+  });
+});
+
+describe('inferirCapituloPadre (proyectos antiguos sin capitulo_codigo)', () => {
+  it('no asigna al subcapítulo anterior una partida directa del capítulo (03.02 tras 03.01#)', () => {
+    const rows = [
+      { Capítulo: '03#' },
+      { Capítulo: '03.01#' },
+      { Capítulo: '03.01.01', 'Precio Total (€)': 100, Cantidad: 1 },
+      { Capítulo: '03.02', 'Precio Total (€)': 50, Cantidad: 1 },
+      { Capítulo: '04#' },
+      { Capítulo: '04.01#' },
+      { Capítulo: '04.01.01', 'Precio Total (€)': 10, Cantidad: 1 },
+      { Capítulo: '04.05', 'Precio Total (€)': 7, Cantidad: 1 },
+    ];
+    const inf = inferirCapituloPadre(rows);
+    expect(inf.find((r) => r.Capítulo === '03.02').capitulo_codigo).toBeUndefined();
+    expect(inf.find((r) => r.Capítulo === '04.05').capitulo_codigo).toBeUndefined();
+
+    const totales = calcularTotalesCapitulos(rows);
+    expect(totales['03.01#']).toBe(100);
+    expect(totales['03#']).toBe(150);
+    expect(totales['04.01#']).toBe(10);
+    expect(totales['04#']).toBe(17);
+  });
+
+  it('sigue asignando el nieto huérfano 03.03.03 a 03.02# cuando no existe 03.03#', () => {
+    const rows = [
+      { Capítulo: '03#' },
+      { Capítulo: '03.02#' },
+      { Capítulo: '03.02.01', 'Precio Total (€)': 10, Cantidad: 1 },
+      { Capítulo: '03.03.03', 'Precio Total (€)': 25, Cantidad: 2 },
+    ];
+    expect(inferirCapituloPadre(rows)[3].capitulo_codigo).toBe('03.02#');
+    expect(calcularTotalesCapitulos(rows)['03.02#']).toBe(60);
   });
 });
 

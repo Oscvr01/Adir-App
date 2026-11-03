@@ -211,6 +211,8 @@ const NuevoProyecto = () => {
                     id: `${propuestaId}-${index}-${p['Capítulo'].replace(/[^a-zA-Z0-9._-]/g, '_')}`,
                     propuesta_id: propuestaId,
                     texto_partida: `${p['Capítulo']}::${p['Descripción']}`,
+                    capitulo_codigo: p.capitulo_codigo || null,
+                    descripcion: Array.isArray(p.mediciones) && p.mediciones.length > 0 ? JSON.stringify(p.mediciones) : null,
                     oficio_asignado: null,
                     cantidad: Number(p.Cantidad) || 1,
                     unidad: p.Unidad || p.unidad || null,
