@@ -43,6 +43,8 @@ const PartidasTable = ({
   beneficioPct = 0,
   listaOficios = [],
   respuestasPorPartida = {},
+  expandedMediciones: externalExpandedMediciones,
+  onExpandedMedicionesChange,
   onUpdateCantidad,
   onUpdateUnidad,
   onUpdatePrice,
@@ -55,7 +57,20 @@ const PartidasTable = ({
   const [rawInputs, setRawInputs] = useState({});
   const [collapsedCaps, setCollapsedCaps] = useState(() => new Set());
   const [collapsedSubcaps, setCollapsedSubcaps] = useState(() => new Set());
-  const [expandedMediciones, setExpandedMediciones] = useState(() => new Set());
+  const [internalExpandedMediciones, setInternalExpandedMediciones] = useState(() => new Set());
+
+  const isControlledMediciones = externalExpandedMediciones !== undefined;
+  const expandedMediciones = isControlledMediciones ? externalExpandedMediciones : internalExpandedMediciones;
+
+  const setExpandedMedicionesState = (updater) => {
+    const nextVal = typeof updater === 'function' ? updater(expandedMediciones) : updater;
+    if (!isControlledMediciones) {
+      setInternalExpandedMediciones(nextVal);
+    }
+    if (typeof onExpandedMedicionesChange === 'function') {
+      onExpandedMedicionesChange(nextVal);
+    }
+  };
 
   const isJefes = mode === 'jefes';
 
@@ -114,7 +129,7 @@ const PartidasTable = ({
   };
 
   const toggleMedicion = (idx) => {
-    setExpandedMediciones((prev) => {
+    setExpandedMedicionesState((prev) => {
       const next = new Set(prev);
       if (next.has(idx)) next.delete(idx);
       else next.add(idx);
@@ -150,11 +165,11 @@ const PartidasTable = ({
 
   const handleToggleAllMediciones = () => {
     if (allMedicionesExpanded) {
-      setExpandedMediciones(new Set());
+      setExpandedMedicionesState(new Set());
     } else {
       setCollapsedCaps(new Set());
       setCollapsedSubcaps(new Set());
-      setExpandedMediciones(new Set(indicesConMedicion));
+      setExpandedMedicionesState(new Set(indicesConMedicion));
     }
   };
 

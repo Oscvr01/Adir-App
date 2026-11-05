@@ -75,6 +75,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
     const [activeProject, setActiveProject] = useState(null);
     const [partidas, setPartidas] = useState([]);
     const [proveedores, setProveedores] = useState([]);
+    const [expandedMediciones, setExpandedMediciones] = useState(() => new Set());
     const [, setLoadingProject] = useState(false);
     const [saving, setSaving] = useState(false);
     const {
@@ -262,6 +263,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
 
     const openProject = async (project) => {
         setActiveProject(project);
+        setExpandedMediciones(new Set());
         setLoadingProject(true);
         setSelectedOficio("");
         setSelectedProviders({});
@@ -857,6 +859,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                 precio_total: precioTotal,
                 fecha:        new Date().toISOString(),
                 titulo:       'Borrador de Presupuesto', esBorrador: true, beneficioPct,
+                medicionesVisibles: expandedMediciones,
             });
             const fname = 'Borrador_' + (activeProject.Proyecto || 'presupuesto').replace(/[^a-zA-Z0-9_-]/g, '_');
             descargarPDF(doc, fname);
@@ -1068,6 +1071,8 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                             mode="borradores" beneficioPct={beneficioPct}
                             partidas={partidas}
                             listaOficios={listaOficios}
+                            expandedMediciones={expandedMediciones}
+                            onExpandedMedicionesChange={setExpandedMediciones}
                             onUpdateCantidad={updateCantidad}
                             onUpdateUnidad={updateUnidad}
                             onUpdatePrice={updatePrice}

@@ -142,6 +142,7 @@ const PresupuestoCliente = () => {
             fecha:        presupuesto.fecha_envio,
             token:        presupuesto.token,
             titulo:       'Presupuesto de Obra',
+            medicionesVisibles: expandedMediciones,
         });
         if (forDownload) {
             descargarPDF(doc, 'Presupuesto_ADIR_' + presupuesto.propuesta_id);
@@ -277,6 +278,7 @@ const PresupuestoCliente = () => {
                                 titulo:       'Contrato de Obra — Copia Firmada',
                                 firma_base64: firmaData,
                                 fecha_firma:  fechaFirma,
+                                medicionesVisibles: expandedMediciones,
                             });
                             descargarPDF(doc, 'Contrato_Firmado_' + presupuesto.propuesta_id);
                         }}

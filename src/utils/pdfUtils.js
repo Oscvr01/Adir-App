@@ -3,7 +3,12 @@ import autoTable from 'jspdf-autotable';
 import { logoBase64 } from '../assets/logoBase64';
 import { cleanText as cleanDesc } from './escape';
 import { aplicarBeneficio } from './format';
-import { calcularTotalesCapitulos, getTipoFila as getFilaTipoPDF } from './partidas';
+import { calcularTotalesCapitulos, getTipoFila as getFilaTipoPDF, parseMedicionesGuardadas } from './partidas';
+
+const fmtMedNumPDF = (v) => {
+    if (v === null || v === undefined || v === '' || Number.isNaN(Number(v))) return '—';
+    return Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+};
 
 // ─── Colores corporativos ADIR (sincronizados con --primary: #002D54) ────────
 const AZUL        = [0, 45, 84];     // #002D54 — azul principal app
@@ -32,6 +37,9 @@ const SUB_TEXT    = [42, 90, 138];   // #2a5a8a — texto subcapítulo
  * @param {string}  [data.titulo]        - Título del doc ("Borrador" / "Presupuesto de Obra")
  * @param {string}  [data.firma_base64]  - Base64 de la firma (activa sección firma)
  * @param {string}  [data.fecha_firma]   - Fecha de firma (ISO)
+ * @param {boolean} [data.esBorrador]    - Si es borrador interno (muestra Coste y PVP)
+ * @param {number}  [data.beneficioPct]  - Margen de beneficio en %
+ * @param {Set|Array|boolean} [data.medicionesVisibles] - Conjunto de índices o IDs de partidas cuyas mediciones se desglosan en el PDF
  * @returns {jsPDF}
  */
 export function generarPresupuestoPDF(data) {
@@ -48,6 +56,7 @@ export function generarPresupuestoPDF(data) {
         fecha_firma   = null,
         esBorrador    = false,
         beneficioPct  = 0,
+        medicionesVisibles = null,
     } = data;
 
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -134,7 +143,27 @@ export function generarPresupuestoPDF(data) {
     let totalCosteCalculado = 0;
     let totalPvpCalculado = 0;
 
-    todasPartidas.forEach(p => {
+    const isMedicionVisible = (p, idx) => {
+        if (!medicionesVisibles) return false;
+        if (medicionesVisibles === true) return true;
+        if (medicionesVisibles instanceof Set) {
+            if (medicionesVisibles.has(idx)) return true;
+            if (p.id !== undefined && p.id !== null && medicionesVisibles.has(p.id)) return true;
+            const capLimpio = (p.Capítulo || p.Capitulo || '').replace(/#+$/, '').trim();
+            if (capLimpio && medicionesVisibles.has(capLimpio)) return true;
+            return false;
+        }
+        if (Array.isArray(medicionesVisibles)) {
+            if (medicionesVisibles.includes(idx)) return true;
+            if (p.id !== undefined && p.id !== null && medicionesVisibles.includes(p.id)) return true;
+            const capLimpio = (p.Capítulo || p.Capitulo || '').replace(/#+$/, '').trim();
+            if (capLimpio && medicionesVisibles.includes(capLimpio)) return true;
+            return false;
+        }
+        return false;
+    };
+
+    todasPartidas.forEach((p, idx) => {
         const tipo   = getFilaTipoPDF(p);
         const hKey   = p.Capítulo || p.Capitulo || '';
         const cap    = hKey.replace(/#+/g, '').trim();
@@ -180,6 +209,44 @@ export function generarPresupuestoPDF(data) {
                     { content: costeLinea.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: costeLinea > 0 ? AZUL : GRIS_MUTED } },
                     { content: pvpLinea.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: pvpLinea > 0 ? VERDE : GRIS_MUTED } },
                 ]);
+
+                if (isMedicionVisible(p, idx)) {
+                    const mediciones = parseMedicionesGuardadas(p);
+                    if (mediciones.length > 0) {
+                        const bgH = [240, 244, 248];
+                        const bgR = [252, 253, 255];
+                        const bgT = [244, 247, 252];
+                        const stH = { fontStyle: 'bold', fontSize: 7, textColor: AZUL, fillColor: bgH };
+
+                        filas.push([
+                            { content: '', styles: { fillColor: bgH } },
+                            { content: '  ↳ Desglose de medición (' + mediciones.length + (mediciones.length === 1 ? ' línea' : ' líneas') + ')', styles: { ...stH, fontStyle: 'bolditalic' } },
+                            { content: 'Uds.', styles: { ...stH, halign: 'right' } },
+                            { content: 'Long.', styles: { ...stH, halign: 'right' } },
+                            { content: 'Anch.', styles: { ...stH, halign: 'right' } },
+                            { content: 'Alt.', styles: { ...stH, halign: 'right' } },
+                            { content: 'Parcial', styles: { ...stH, halign: 'right' } },
+                        ]);
+
+                        mediciones.forEach(m => {
+                            filas.push([
+                                { content: '', styles: { fillColor: bgR } },
+                                { content: '     ' + (m.comentario || '—'), styles: { fontSize: 7, textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.uds), styles: { fontSize: 7, halign: 'right', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.largo), styles: { fontSize: 7, halign: 'right', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.ancho), styles: { fontSize: 7, halign: 'right', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.alto), styles: { fontSize: 7, halign: 'right', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.parcial), styles: { fontSize: 7, halign: 'right', fontStyle: 'bold', textColor: AZUL, fillColor: bgR } },
+                            ]);
+                        });
+
+                        filas.push([
+                            { content: '', styles: { fillColor: bgT } },
+                            { content: 'Total medición' + (unidad ? ' (' + unidad + ')' : '') + ':', colSpan: 5, styles: { fontSize: 7, fontStyle: 'bold', halign: 'right', textColor: AZUL, fillColor: bgT } },
+                            { content: cant.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 }), styles: { fontSize: 7, fontStyle: 'bold', halign: 'right', textColor: AZUL, fillColor: bgT } },
+                        ]);
+                    }
+                }
             }
         } else if (esModoDesglose) {
             // ── MODO CLIENTE DESGLOSE: 6 columnas (muestra el PVP / precio con beneficio) ──
@@ -220,6 +287,52 @@ export function generarPresupuestoPDF(data) {
                     { content: precio.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: precio > 0 ? 'normal' : 'italic', textColor: precio > 0 ? GRIS_TEXTO : GRIS_MUTED } },
                     { content: total.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €', styles: { halign: 'right', fontStyle: 'bold', textColor: total > 0 ? AZUL : GRIS_MUTED } },
                 ]);
+
+                if (isMedicionVisible(p, idx)) {
+                    const mediciones = parseMedicionesGuardadas(p);
+                    if (mediciones.length > 0) {
+                        const bgH = [240, 244, 248];
+                        const bgR = [252, 253, 255];
+                        const bgT = [244, 247, 252];
+                        const stH = { fontStyle: 'bold', fontSize: 7, textColor: AZUL, fillColor: bgH };
+
+                        filas.push([
+                            { content: '', styles: { fillColor: bgH } },
+                            { content: '  ↳ Desglose de medición (' + mediciones.length + (mediciones.length === 1 ? ' línea' : ' líneas') + ')', styles: { ...stH, fontStyle: 'bolditalic' } },
+                            { content: 'Uds.', styles: { ...stH, halign: 'center' } },
+                            { content: 'Long. × Anch. × Alt.', colSpan: 2, styles: { ...stH, halign: 'center' } },
+                            { content: 'Parcial', styles: { ...stH, halign: 'right' } },
+                        ]);
+
+                        mediciones.forEach(m => {
+                            const partDims = [];
+                            if (m.largo !== null && m.largo !== undefined && m.largo !== '' && Number(m.largo) !== 0) {
+                                partDims.push(Number(m.largo).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 }));
+                            }
+                            if (m.ancho !== null && m.ancho !== undefined && m.ancho !== '' && Number(m.ancho) !== 0) {
+                                partDims.push(Number(m.ancho).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 }));
+                            }
+                            if (m.alto !== null && m.alto !== undefined && m.alto !== '' && Number(m.alto) !== 0) {
+                                partDims.push(Number(m.alto).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 }));
+                            }
+                            const dimsStr = partDims.length > 0 ? partDims.join(' × ') : '—';
+
+                            filas.push([
+                                { content: '', styles: { fillColor: bgR } },
+                                { content: '     ' + (m.comentario || '—'), styles: { fontSize: 7, textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.uds), styles: { fontSize: 7, halign: 'center', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: dimsStr, colSpan: 2, styles: { fontSize: 7, halign: 'center', textColor: GRIS_TEXTO, fillColor: bgR } },
+                                { content: fmtMedNumPDF(m.parcial), styles: { fontSize: 7, halign: 'right', fontStyle: 'bold', textColor: AZUL, fillColor: bgR } },
+                            ]);
+                        });
+
+                        filas.push([
+                            { content: '', styles: { fillColor: bgT } },
+                            { content: 'Total medición' + (unidad ? ' (' + unidad + ')' : '') + ':', colSpan: 4, styles: { fontSize: 7, fontStyle: 'bold', halign: 'right', textColor: AZUL, fillColor: bgT } },
+                            { content: cant.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 }), styles: { fontSize: 7, fontStyle: 'bold', halign: 'right', textColor: AZUL, fillColor: bgT } },
+                        ]);
+                    }
+                }
                 const comentario = (p.comentario || '').trim();
                 if (comentario) {
                     filas.push([
