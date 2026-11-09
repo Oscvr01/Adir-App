@@ -10,7 +10,7 @@ import {
 import { TODOS_LOS_OFICIOS, getCleanProjectName } from '../utils/aiAllocation';
 import { escapeHtml } from '../utils/escape';
 import { fmtEuro, aplicarBeneficio } from '../utils/format';
-import { normalizarYOrdenarPartidas, getTipoFila, mapearPartidasDesdeBD, actualizarCampoPartida, calcularTotalesCapitulos, calcularTotalPartidas } from '../utils/partidas';
+import { normalizarYOrdenarPartidas, getTipoFila, mapearPartidasDesdeBD, actualizarCampoPartida, actualizarLineaMedicionPartida, calcularTotalesCapitulos, calcularTotalPartidas } from '../utils/partidas';
 import { useBeneficioProyecto } from '../hooks/useBeneficioProyecto';
 import PartidasTable from '../components/PartidasTable';
 
@@ -283,6 +283,10 @@ const JefesObra = () => {
         setPartidas(prev => actualizarCampoPartida(prev, idx, "Oficio Asignado", val));
     };
 
+    const updateMedicion = (partidaIdx, medicionIdx, campo, valor) => {
+        setPartidas(prev => actualizarLineaMedicionPartida(prev, partidaIdx, medicionIdx, campo, valor));
+    };
+
     const updateCantidad = (idx, val) => {
         setPartidas(prev => actualizarCampoPartida(prev, idx, "Cantidad", val));
     };
@@ -373,7 +377,8 @@ const JefesObra = () => {
                     unidad: p["Unidad IA"] || null,
                     proveedor_adjudicado_id: p.proveedor_adjudicado_id || null,
                     estado_adjudicacion: p.proveedor_adjudicado_id ? 'Adjudicado' : null,
-                    ...(p.texto_partida ? { texto_partida: p.texto_partida } : {})
+                    ...(p.texto_partida ? { texto_partida: p.texto_partida } : {}),
+                    ...(Array.isArray(p.mediciones) && p.mediciones.length > 0 ? { descripcion: JSON.stringify(p.mediciones) } : {})
                 };
                 return supabase.from('partidas').update(dataToUpdate).eq('id', p.id);
             });
@@ -840,6 +845,7 @@ const JefesObra = () => {
                                     partidas={partidas}
                                     listaOficios={oficiosDinamicos}
                                     respuestasPorPartida={respuestasPorPartida}
+                                    onUpdateMedicion={updateMedicion}
                                     onUpdateCantidad={updateCantidad}
                                     onUpdateUnidad={updateUnidad}
                                     onUpdatePrice={updatePrice}

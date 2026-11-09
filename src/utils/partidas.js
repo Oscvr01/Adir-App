@@ -406,6 +406,122 @@ export function parseMedicionesGuardadas(p) {
 }
 
 /**
+ * Parsea un valor numérico de una celda de medición (acepta números, cadenas con coma
+ * o punto decimal, y devuelve `null` si está vacío o es guion).
+ */
+export function parseNumeroMedicion(val) {
+  if (val === null || val === undefined) return null;
+  if (typeof val === 'number') {
+    return Number.isFinite(val) ? Math.round((val + Number.EPSILON) * 1000) / 1000 : null;
+  }
+  const s = String(val).trim();
+  if (s === '' || s === '—' || s === '-') return null;
+  const normalized =
+    s.includes(',') && s.includes('.')
+      ? s.replace(/\./g, '').replace(',', '.')
+      : s.replace(',', '.');
+  const n = parseFloat(normalized);
+  return Number.isFinite(n) ? Math.round((n + Number.EPSILON) * 1000) / 1000 : null;
+}
+
+/**
+ * Recalcula de forma inmutable una línea del desglose de medición tras editar
+ * `uds`, `largo`, `ancho`, `alto` o directamente `parcial`.
+ */
+export function recalcularLineaMedicion(linea, campo, nuevoValor) {
+  if (!linea) return linea;
+  const camposDim = ['uds', 'largo', 'ancho', 'alto'];
+
+  if (campo === 'parcial') {
+    const parcialParsed = parseNumeroMedicion(nuevoValor);
+    return {
+      ...linea,
+      parcial: parcialParsed ?? 0,
+    };
+  }
+
+  if (camposDim.includes(campo)) {
+    const updated = {
+      ...linea,
+      [campo]: parseNumeroMedicion(nuevoValor),
+    };
+    const hasDims =
+      updated.uds !== null ||
+      updated.largo !== null ||
+      updated.ancho !== null ||
+      updated.alto !== null;
+
+    let parcial = 0;
+    if (hasDims && updated.tipo !== '1' && updated.tipo !== '2') {
+      const prod =
+        (updated.uds ?? 1) *
+        (updated.largo ?? 1) *
+        (updated.ancho ?? 1) *
+        (updated.alto ?? 1);
+      parcial = Math.round((prod + Number.EPSILON) * 1000) / 1000;
+    }
+    return {
+      ...updated,
+      parcial,
+    };
+  }
+
+  return {
+    ...linea,
+    [campo]: nuevoValor,
+  };
+}
+
+/**
+ * Suma los parciales de todas las líneas de medición de una partida,
+ * redondeando a 3 decimales.
+ */
+export function calcularTotalMediciones(mediciones) {
+  if (!Array.isArray(mediciones) || mediciones.length === 0) return 0;
+  const suma = mediciones.reduce((acc, m) => {
+    if (!m || m.tipo === '1' || m.tipo === '2') return acc;
+    return acc + (parseFloat(m.parcial) || 0);
+  }, 0);
+  return Math.round((suma + Number.EPSILON) * 1000) / 1000;
+}
+
+/**
+ * Actualiza una línea de medición dentro de `partidas[partidaIdx]`, recalcula
+ * automáticamente la `Cantidad` total de la partida como suma de parciales y
+ * sincroniza `mediciones` y `descripcion` (JSON) marcando `isModified: true`.
+ */
+export function actualizarLineaMedicionPartida(
+  partidas,
+  partidaIdx,
+  medicionIdx,
+  campo,
+  valor,
+  extraProps = {}
+) {
+  if (!Array.isArray(partidas) || !partidas[partidaIdx]) return partidas;
+  const partida = partidas[partidaIdx];
+  const medicionesActuales = parseMedicionesGuardadas(partida);
+  if (medicionIdx < 0 || medicionIdx >= medicionesActuales.length) return partidas;
+
+  const nuevasMediciones = medicionesActuales.map((m, idx) =>
+    idx === medicionIdx ? recalcularLineaMedicion(m, campo, valor) : m
+  );
+  const nuevaCantidad = calcularTotalMediciones(nuevasMediciones);
+
+  const copy = [...partidas];
+  copy[partidaIdx] = {
+    ...partida,
+    mediciones: nuevasMediciones,
+    descripcion: JSON.stringify(nuevasMediciones),
+    Cantidad: nuevaCantidad,
+    ...(partida.cantidad !== undefined ? { cantidad: nuevaCantidad } : {}),
+    isModified: true,
+    ...extraProps,
+  };
+  return copy;
+}
+
+/**
  * Mapea filas de la tabla `partidas` de BD al formato común de UI usado en
  * Borradores y Jefes de Obra. Permite inyectar campos específicos por vista
  * mediante `extraFieldsFn(row, finalPrice)`.

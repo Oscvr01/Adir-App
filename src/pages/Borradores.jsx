@@ -59,7 +59,7 @@ import { asignarProveedoresIA, TODOS_LOS_OFICIOS, getCleanProjectName } from '..
 import { generarPresupuestoPDF, descargarPDF } from '../utils/pdfUtils';
 import { escapeHtml } from '../utils/escape';
 import { fmtEuro, aplicarBeneficio } from '../utils/format';
-import { normalizarYOrdenarPartidas, calcularTotalPartidas, mapearPartidasDesdeBD, actualizarCampoPartida, perteneceACapitulo } from '../utils/partidas';
+import { normalizarYOrdenarPartidas, calcularTotalPartidas, mapearPartidasDesdeBD, actualizarCampoPartida, actualizarLineaMedicionPartida, perteneceACapitulo } from '../utils/partidas';
 import { useBeneficioProyecto } from '../hooks/useBeneficioProyecto';
 import PartidasTable from '../components/PartidasTable';
 
@@ -334,7 +334,8 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                         unidad: p["Unidad IA"] || null,
                         cantidad: parseFloat(p.Cantidad) || 0,
                         force_quote: p["Needs Quote"] ? 1 : 0,
-                        ...(p.texto_partida ? { texto_partida: p.texto_partida } : {})
+                        ...(p.texto_partida ? { texto_partida: p.texto_partida } : {}),
+                        ...(Array.isArray(p.mediciones) && p.mediciones.length > 0 ? { descripcion: JSON.stringify(p.mediciones) } : {})
                     };
                     // Never overwrite precio_base_estimado for adjudicated partidas
                     // — their real price lives in precio_adjudicado
@@ -569,6 +570,11 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
 
     const updateUnidad = (idx, newVal) => {
         setPartidas(prev => actualizarCampoPartida(prev, idx, "Unidad IA", newVal, { unidad_asignada_por_ia: false }));
+        setHasUnsavedChanges(true);
+    };
+
+    const updateMedicion = (partidaIdx, medicionIdx, campo, valor) => {
+        setPartidas(prev => actualizarLineaMedicionPartida(prev, partidaIdx, medicionIdx, campo, valor, { origen_modificacion: 'Manual' }));
         setHasUnsavedChanges(true);
     };
 
@@ -1073,6 +1079,7 @@ const Borradores = ({ sessionCache = {}, setSessionCache }) => {
                             listaOficios={listaOficios}
                             expandedMediciones={expandedMediciones}
                             onExpandedMedicionesChange={setExpandedMediciones}
+                            onUpdateMedicion={updateMedicion}
                             onUpdateCantidad={updateCantidad}
                             onUpdateUnidad={updateUnidad}
                             onUpdatePrice={updatePrice}

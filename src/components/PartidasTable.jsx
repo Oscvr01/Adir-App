@@ -14,6 +14,15 @@ const fmtMedNum = (v) =>
     ? '—'
     : Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
 
+const fmtMedInput = (v) =>
+  v === null || v === undefined || v === ''
+    ? ''
+    : Number(v).toLocaleString('es-ES', {
+        useGrouping: false,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 3,
+      });
+
 const renderDescripcionPartida = (desc, esPartida) => {
   if (!esPartida || typeof desc !== 'string' || !desc.includes(' — ')) {
     return desc;
@@ -45,6 +54,7 @@ const PartidasTable = ({
   respuestasPorPartida = {},
   expandedMediciones: externalExpandedMediciones,
   onExpandedMedicionesChange,
+  onUpdateMedicion,
   onUpdateCantidad,
   onUpdateUnidad,
   onUpdatePrice,
@@ -183,6 +193,47 @@ const PartidasTable = ({
     const capClean = (p.Capítulo || '').replace(/#+/g, '');
     const ud = (p['Unidad IA'] || p.unidad || p.Unidad || '').trim();
     const cantTotal = parseFloat(p.Cantidad) || 0;
+
+    const renderEditableMedCell = (m, mIdx, campo, isParcial = false) => {
+      const val = m[campo];
+      if (!onUpdateMedicion) {
+        return (
+          <td style={{ textAlign: 'right', fontWeight: isParcial ? 600 : 400 }}>
+            {fmtMedNum(val)}
+          </td>
+        );
+      }
+      const rawKey = `med_${idx}_${mIdx}_${campo}`;
+      const commitChange = (rawVal) => {
+        if (rawInputs[rawKey] === undefined) return;
+        onUpdateMedicion(idx, mIdx, campo, rawVal);
+        setRawInputs((prev) => {
+          const n = { ...prev };
+          delete n[rawKey];
+          return n;
+        });
+      };
+      return (
+        <td style={{ textAlign: 'right' }}>
+          <input
+            type="text"
+            className={`pt-input-medicion ${isParcial ? 'pt-input-medicion-parcial' : ''}`}
+            placeholder="—"
+            value={rawInputs[rawKey] ?? fmtMedInput(val)}
+            onChange={(e) =>
+              setRawInputs((prev) => ({ ...prev, [rawKey]: e.target.value }))
+            }
+            onBlur={(e) => commitChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.currentTarget.blur();
+              }
+            }}
+          />
+        </td>
+      );
+    };
+
     return (
       <tr key={`med_${idx}`} className="pt-row-medicion">
         <td colSpan={colSpan}>
@@ -211,11 +262,11 @@ const PartidasTable = ({
                 {mediciones.map((m, mIdx) => (
                   <tr key={mIdx}>
                     <td style={{ textAlign: 'left' }}>{m.comentario || '—'}</td>
-                    <td style={{ textAlign: 'right' }}>{fmtMedNum(m.uds)}</td>
-                    <td style={{ textAlign: 'right' }}>{fmtMedNum(m.largo)}</td>
-                    <td style={{ textAlign: 'right' }}>{fmtMedNum(m.ancho)}</td>
-                    <td style={{ textAlign: 'right' }}>{fmtMedNum(m.alto)}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmtMedNum(m.parcial)}</td>
+                    {renderEditableMedCell(m, mIdx, 'uds')}
+                    {renderEditableMedCell(m, mIdx, 'largo')}
+                    {renderEditableMedCell(m, mIdx, 'ancho')}
+                    {renderEditableMedCell(m, mIdx, 'alto')}
+                    {renderEditableMedCell(m, mIdx, 'parcial', true)}
                   </tr>
                 ))}
               </tbody>
@@ -461,12 +512,25 @@ const PartidasTable = ({
                       {esPartida && (
                         <input
                           type="text"
-                          className="pt-input-cant-jefes"
-                          value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
-                          onChange={(e) =>
-                            setRawInputs((prev) => ({ ...prev, [`cant_${idx}`]: e.target.value }))
+                          className={`pt-input-cant-jefes ${tieneMedicion && onUpdateMedicion ? 'pt-input-cant-calc' : ''}`}
+                          readOnly={Boolean(tieneMedicion && onUpdateMedicion)}
+                          title={
+                            tieneMedicion && onUpdateMedicion
+                              ? 'Calculado desde el desglose de medición (P). Haz clic para desplegar.'
+                              : undefined
                           }
+                          onClick={() => {
+                            if (tieneMedicion && onUpdateMedicion && !isMedicionOpen) {
+                              toggleMedicion(idx);
+                            }
+                          }}
+                          value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
+                          onChange={(e) => {
+                            if (tieneMedicion && onUpdateMedicion) return;
+                            setRawInputs((prev) => ({ ...prev, [`cant_${idx}`]: e.target.value }));
+                          }}
                           onBlur={(e) => {
+                            if (tieneMedicion && onUpdateMedicion) return;
                             const v = parseDecimal(e.target.value);
                             onUpdateCantidad(idx, v);
                             setRawInputs((prev) => {
@@ -586,12 +650,25 @@ const PartidasTable = ({
                     {esPartida && (
                       <input
                         type="text"
-                        className="pt-input-cant"
-                        value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
-                        onChange={(e) =>
-                          setRawInputs((prev) => ({ ...prev, [`cant_${idx}`]: e.target.value }))
+                        className={`pt-input-cant ${tieneMedicion && onUpdateMedicion ? 'pt-input-cant-calc' : ''}`}
+                        readOnly={Boolean(tieneMedicion && onUpdateMedicion)}
+                        title={
+                          tieneMedicion && onUpdateMedicion
+                            ? 'Calculado desde el desglose de medición (P). Haz clic para desplegar.'
+                            : undefined
                         }
+                        onClick={() => {
+                          if (tieneMedicion && onUpdateMedicion && !isMedicionOpen) {
+                            toggleMedicion(idx);
+                          }
+                        }}
+                        value={rawInputs[`cant_${idx}`] ?? formatDecimal(p.Cantidad)}
+                        onChange={(e) => {
+                          if (tieneMedicion && onUpdateMedicion) return;
+                          setRawInputs((prev) => ({ ...prev, [`cant_${idx}`]: e.target.value }));
+                        }}
                         onBlur={(e) => {
+                          if (tieneMedicion && onUpdateMedicion) return;
                           const v = parseDecimal(e.target.value);
                           onUpdateCantidad(idx, v);
                           setRawInputs((prev) => {

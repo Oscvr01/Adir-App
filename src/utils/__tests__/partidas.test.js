@@ -13,6 +13,9 @@ import {
   mapearPartidasDesdeBD,
   actualizarCampoPartida,
   inferirCapituloPadre,
+  recalcularLineaMedicion,
+  calcularTotalMediciones,
+  actualizarLineaMedicionPartida,
 } from '../partidas';
 import { aplicarBeneficio, formatDecimal, parseDecimal, fmtEuro } from '../format';
 
@@ -411,6 +414,103 @@ describe('actualizarCampoPartida', () => {
     expect(actualizado[0].isModified).toBe(true);
     expect(actualizado[0].origen_modificacion).toBe('Manual');
     expect(actualizado[1]).toBe(inicial[1]);
+  });
+});
+
+describe('recalcularLineaMedicion, calcularTotalMediciones y actualizarLineaMedicionPartida', () => {
+  it('recalcula parcial al editar uds, largo, ancho o alto respetando dimensiones vacías (null)', () => {
+    const lineaInicial = {
+      tipo: '',
+      comentario: 'Salón planta baja',
+      uds: 2,
+      largo: 4.5,
+      ancho: 3,
+      alto: null,
+      parcial: 27,
+    };
+
+    // Cambiar largo a "5,5" -> 2 * 5.5 * 3 * 1 = 33
+    const conLargo = recalcularLineaMedicion(lineaInicial, 'largo', '5,5');
+    expect(conLargo.largo).toBe(5.5);
+    expect(conLargo.parcial).toBe(33);
+
+    // Vaciar ancho -> 2 * 5.5 * 1 * 1 = 11
+    const sinAncho = recalcularLineaMedicion(conLargo, 'ancho', '');
+    expect(sinAncho.ancho).toBeNull();
+    expect(sinAncho.parcial).toBe(11);
+
+    // Vaciar todas las dimensiones -> parcial = 0
+    const sinLargo = recalcularLineaMedicion(sinAncho, 'largo', '');
+    const vacia = recalcularLineaMedicion(sinLargo, 'uds', '');
+    expect(vacia.uds).toBeNull();
+    expect(vacia.parcial).toBe(0);
+  });
+
+  it('permite editar el parcial directamente de una línea sin alterar sus dimensiones', () => {
+    const lineaInicial = {
+      tipo: '',
+      comentario: 'Pasillo',
+      uds: 1,
+      largo: 6.2,
+      ancho: 1.5,
+      alto: null,
+      parcial: 9.3,
+    };
+
+    const editada = recalcularLineaMedicion(lineaInicial, 'parcial', '12,75');
+    expect(editada.parcial).toBe(12.75);
+    expect(editada.largo).toBe(6.2);
+    expect(editada.ancho).toBe(1.5);
+  });
+
+  it('suma correctamente los parciales de varias líneas en calcularTotalMediciones', () => {
+    const lineas = [
+      { comentario: 'Línea 1', parcial: 12.345 },
+      { comentario: 'Línea 2', parcial: 7.655 },
+      { tipo: '1', comentario: 'Subtotal Presto', parcial: 20 }, // Se ignora por ser subtotal tipo 1
+    ];
+    expect(calcularTotalMediciones(lineas)).toBe(20);
+  });
+
+  it('actualizarLineaMedicionPartida actualiza la línea, recalcula Cantidad total y sincroniza JSON en descripcion', () => {
+    const partidasIniciales = [
+      {
+        id: 'p1',
+        Capítulo: '01.01',
+        Descripción: 'Demolición pavimento',
+        'Precio Total (€)': 10,
+        Cantidad: 25,
+        cantidad: 25,
+        isModified: false,
+        mediciones: [
+          { tipo: '', comentario: 'Habitación 1', uds: 1, largo: 5, ancho: 3, alto: null, parcial: 15 },
+          { tipo: '', comentario: 'Habitación 2', uds: 1, largo: 5, ancho: 2, alto: null, parcial: 10 },
+        ],
+      },
+      {
+        id: 'p2',
+        Capítulo: '01.02',
+        Descripción: 'Partida sin medición',
+        'Precio Total (€)': 50,
+        Cantidad: 4,
+        isModified: false,
+        mediciones: [],
+      },
+    ];
+
+    // Editar largo de Habitación 1 de 5 a 8 -> parcial pasa de 15 a 24, total Cantidad pasa de 25 a 34
+    const actualizadas = actualizarLineaMedicionPartida(partidasIniciales, 0, 0, 'largo', '8');
+
+    expect(actualizadas[0].mediciones[0].largo).toBe(8);
+    expect(actualizadas[0].mediciones[0].parcial).toBe(24);
+    expect(actualizadas[0].Cantidad).toBe(34);
+    expect(actualizadas[0].cantidad).toBe(34);
+    expect(actualizadas[0].isModified).toBe(true);
+    expect(JSON.parse(actualizadas[0].descripcion)).toEqual(actualizadas[0].mediciones);
+
+    // La partida sin medición permanece intacta y el total del presupuesto refleja la nueva cantidad (34 * 10 + 4 * 50 = 540)
+    expect(actualizadas[1]).toBe(partidasIniciales[1]);
+    expect(calcularTotalPartidas(actualizadas)).toBe(540);
   });
 });
 
